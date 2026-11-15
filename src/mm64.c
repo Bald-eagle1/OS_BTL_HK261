@@ -486,39 +486,63 @@ int __swap_cp_page(struct memphy_struct *mpsrc, addr_t srcfpn,
  */
 int init_mm(struct mm_struct *mm, struct pcb_t *caller)
 {
-  struct vm_area_struct *vma0 = malloc(sizeof(struct vm_area_struct));
+  memset(mm, 0, sizeof(struct mm_struct));
 
   /* TODO init page table directory */
-   //mm->pgd = ...
-   //mm->p4d = ...
-   //mm->pud = ...
-   //mm->pmd = ...
-   //mm->pt = ...
-   mm->pgd = malloc(512 * sizeof(addr_t)); 
-   mm->p4d = malloc(512 * sizeof(addr_t));
-   mm->pud = malloc(512 * sizeof(addr_t));
-   mm->pmd = malloc(512 * sizeof(addr_t));
-   mm->pt = malloc(PAGING64_MAX_PGN * sizeof(addr_t));
+  mm->pgd = calloc(PAGING_MAX_PGN, sizeof(addr_t));
+  mm->p4d = calloc(PAGING_MAX_PGN, sizeof(addr_t));
+  mm->pud = calloc(PAGING_MAX_PGN, sizeof(addr_t));
+  mm->pmd = calloc(PAGING_MAX_PGN, sizeof(addr_t));
+  mm->pt = calloc(PAGING_MAX_PGN, sizeof(addr_t));
+
+  for (int i = 0; i < PAGING_MAX_PGN; i++) {
+    mm->pgd[i] = (addr_t)mm->p4d;
+    mm->p4d[i] = (addr_t)mm->pud;
+    mm->pud[i] = (addr_t)mm->pmd;
+    mm->pmd[i] = (addr_t)mm->pt;
+  }
+
 
   /* By default the owner comes with at least one vma */
-  vma0->vm_id = 0;
-  vma0->vm_start = 0;
-  vma0->vm_end = vma0->vm_start;
-  vma0->sbrk = vma0->vm_start;
-  struct vm_rg_struct *first_rg = init_vm_rg(vma0->vm_start, vma0->vm_end);
-  enlist_vm_rg_node(&vma0->vm_freerg_list, first_rg);
+  struct vm_area_struct *vma_malloc_used = malloc(sizeof(struct vm_area_struct));
+  struct vm_area_struct *vma_valloc_used = malloc(sizeof(struct vm_area_struct));
+  struct vm_area_struct *vma_stack0 = malloc(sizeof(struct vm_area_struct));
 
-  /* TODO update VMA0 next */
-  // vma0->next = ...
-vma0->vm_next = NULL;
-  /* Point vma owner backward */
-  //vma0->vm_mm = mm; 
-vma0->vm_mm = mm;
+  vma_malloc_used->vm_id = 0;
+  vma_malloc_used->vm_start = 0x5d000;
+  vma_malloc_used->vm_end = vma_malloc_used->vm_start;
+  vma_malloc_used->sbrk = vma_malloc_used->vm_start;
+  vma_malloc_used->vm_next = vma_valloc_used;
+  vma_malloc_used->vm_mm = mm;
+  vma_malloc_used->vm_freerg_list = NULL;
+
+  vma_valloc_used->vm_id = 1;
+  vma_valloc_used->vm_start = 0xff000;
+  vma_valloc_used->vm_end = vma_valloc_used->vm_start;
+  vma_valloc_used->sbrk = vma_valloc_used->vm_start;
+  vma_valloc_used->vm_next = vma_stack0;
+  vma_valloc_used->vm_mm = mm;
+  vma_valloc_used->vm_freerg_list = NULL;
+
+  vma_stack0->vm_id = 2;
+  vma_stack0->vm_start = 0xbfffe000;
+  vma_stack0->vm_end = vma_stack0->vm_start;
+  vma_stack0->sbrk = vma_stack0->vm_start;
+  vma_stack0->vm_next = NULL;
+  vma_stack0->vm_mm = mm;
+  vma_stack0->vm_freerg_list = NULL;
+
   /* TODO: update mmap */
-  //mm->mmap = ...
-  //mm->symrgtbl = ...
-  //mm->kcpooltbl
-mm->mmap = vma0;
+  mm->mmap = vma_malloc_used;
+  mm->fifo_pgn = NULL;
+  mm->kcpooltbl = calloc(PAGING_MAX_SYMTBL_SZ, sizeof(struct kcache_pool_struct));
+  for (int i = 0; i < PAGING_MAX_SYMTBL_SZ; i++) {
+    mm->symrgtbl[i].vmaid = -1;
+    mm->symrgtbl[i].rg_start = 0;
+    mm->symrgtbl[i].rg_end = 0;
+    mm->symrgtbl[i].rg_next = NULL;
+  }
+
   return 0;
 }
 
