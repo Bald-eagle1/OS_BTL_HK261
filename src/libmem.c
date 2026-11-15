@@ -466,61 +466,17 @@ addr_t __kmalloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t 
  */
 int libmem_dma_memcpy(struct pcb_t *caller, uint32_t src, uint32_t dst, uint32_t offset, uint32_t size)
 {
-  struct vm_rg_struct *currg_src = NULL;
-  struct vm_rg_struct *currg_dst = NULL;
+  /* TODO: provide DMA mempy */
 
-  if (caller->mm != NULL) {
-    currg_src = get_symrg_byid(caller->mm, src);
-    currg_dst = get_symrg_byid(caller->mm, dst);
-  }
-
-  if ((currg_src == NULL || (currg_src->rg_start == 0 && currg_src->rg_end == 0)) &&
-      caller->krnl != NULL && caller->krnl->mm != NULL) {
-    currg_src = get_symrg_byid(caller->krnl->mm, src);
-  }
-
-  if ((currg_dst == NULL || (currg_dst->rg_start == 0 && currg_dst->rg_end == 0)) &&
-      caller->krnl != NULL && caller->krnl->mm != NULL) {
-    currg_dst = get_symrg_byid(caller->krnl->mm, dst);
-  }
-
-  addr_t vaddr_src = (currg_src != NULL ? currg_src->rg_start : 0) + offset;
-  addr_t vaddr_dst = (currg_dst != NULL ? currg_dst->rg_start : 0) + offset;
-
-  addr_t bus_src = vaddr_src;
-  addr_t bus_dst = vaddr_dst;
-
-#ifdef MM_PAGING
-#ifdef MM64
-  int fpn_src = -1, fpn_dst = -1;
-  addr_t pgn_src = vaddr_src / PAGING64_PAGESZ;
-  addr_t pgn_dst = vaddr_dst / PAGING64_PAGESZ;
-  if (caller->mm != NULL && pg_getpage(caller->mm, pgn_src, &fpn_src, caller) == 0 && fpn_src >= 0) {
-    bus_src = ((uint64_t)fpn_src * PAGING64_PAGESZ) + (vaddr_src % PAGING64_PAGESZ);
-  }
-  if (caller->mm != NULL && pg_getpage(caller->mm, pgn_dst, &fpn_dst, caller) == 0 && fpn_dst >= 0) {
-    bus_dst = ((uint64_t)fpn_dst * PAGING64_PAGESZ) + (vaddr_dst % PAGING64_PAGESZ);
-  }
-#else
-  int fpn_src = -1, fpn_dst = -1;
-  addr_t pgn_src = PAGING_PGN(vaddr_src);
-  addr_t pgn_dst = PAGING_PGN(vaddr_dst);
-  if (caller->mm != NULL && pg_getpage(caller->mm, pgn_src, &fpn_src, caller) == 0 && fpn_src >= 0) {
-    bus_src = ((uint64_t)fpn_src * PAGING_PAGESZ) + PAGING_OFFST(vaddr_src);
-  }
-  if (caller->mm != NULL && pg_getpage(caller->mm, pgn_dst, &fpn_dst, caller) == 0 && fpn_dst >= 0) {
-    bus_dst = ((uint64_t)fpn_dst * PAGING_PAGESZ) + PAGING_OFFST(vaddr_dst);
-  }
-#endif
-#endif
+  //struct krnl_t *krnl = caller->krnl;
 
   /*
-   * Asynchronous DMA: Submit transfer request to co-processor worker queue.
-   * If queuing fails, fall back to synchronous do_dma().
+   *  TODO: provide asynchronous dma memcpy
+   *        handling the dma_done_callback
    */
-  if (dma_async_submit(caller, (uint64_t)bus_src, (uint64_t)bus_dst, (uint64_t)size) != 0) {
-    do_dma(caller, (uint64_t)bus_src, (uint64_t)bus_dst, (uint64_t)size);
-  }
+  //do_dma(caller, (uint64_t) src, (uint64_t) dst, (uint64_t) size);
+  //krnl->...
+  //krnl->...
 
   return 0;
 }
@@ -530,11 +486,22 @@ int libkmem_copy_from_user(struct pcb_t *caller, uint32_t source, uint32_t desti
 {
   /* TODO: provide OS level management kmem
    */
+
+  struct vm_rg_struct *dest_rg = get_symrg_byid(caller->mm, destination);
+  if (dest_rg == NULL || (dest_rg->rg_start == 0 && dest_rg->rg_end == 0)) {
+    addr_t addr = 0;
+    __kmalloc(caller, 0, destination, offset + size, &addr);
+  }
+
   /*
    * TODO: Map kernel address range
    */
-  //__read_user_mem(...)
-  //__write_kernel_mem(...);
+  for (uint32_t i = 0; i < size; i++) {
+    BYTE data = 0;
+
+    __read_user_mem(caller, 0, source, offset + i, &data);
+    __write_kernel_mem(caller, 0, destination, offset + i, data);
+  }
 
   return 0;
 }
@@ -543,13 +510,22 @@ int libkmem_copy_to_user(struct pcb_t *caller, uint32_t source, uint32_t destina
 {
   /* TODO: provide OS level management kmem
    */
+
+  struct vm_rg_struct *dest_rg = get_symrg_byid(caller->mm, destination);
+  if (dest_rg == NULL || (dest_rg->rg_start == 0 && dest_rg->rg_end == 0)) {
+    addr_t addr = 0;
+    __alloc(caller, 0, destination, offset + size, &addr);
+  }
+
   /*
    * TODO: Map kernel address range
    */
-  //__read_kernel_mem(...)
-  //__write_user_mem(...);
-
-  return 1;
+  for (uint32_t i = 0; i < size; i++) {
+    BYTE data = 0;
+      __read_kernel_mem(caller, 0, source, offset + i, &data);
+      __write_user_mem(caller, 0, destination, offset + i, data);
+  }
+  return 0;
 }
 
 

@@ -60,7 +60,7 @@ struct vm_rg_struct *get_vm_area_node_at_brk(struct pcb_t *caller, int vmaid, ad
 {
   struct vm_rg_struct * newrg;
   /* TODO retrive current vma to obtain newrg, current comment out due to compiler redundant warning*/
-  struct vm_area_struct *cur_vma = get_vma_by_num(caller->krnl->mm, vmaid);
+  struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
 
   newrg = malloc(sizeof(struct vm_rg_struct));
 
@@ -84,10 +84,6 @@ struct vm_rg_struct *get_vm_area_node_at_brk(struct pcb_t *caller, int vmaid, ad
  */
 int validate_overlap_vm_area(struct pcb_t *caller, int vmaid, addr_t vmastart, addr_t vmaend)
 {
-  // if (caller == NULL || caller->mm == NULL) {
-  //   return -1;
-  // }
-
   struct vm_area_struct *vma = caller->mm->mmap;
 
   /* TODO validate the planned memory area is not overlapped */
@@ -137,12 +133,13 @@ int inc_vma_limit(struct pcb_t *caller, int vmaid, addr_t inc_sz)
 
 #ifdef MM64
   addr_t alignedsize = PAGING64_PAGE_ALIGNSZ(inc_sz);
+  int incpgnum = (int)(alignedsize / PAGING64_PAGESZ);
 #else
   addr_t alignedsize = PAGING_PAGE_ALIGNSZ(inc_sz);
+  int incpgnum = (int)(alignedsize / PAGING_PAGESZ);
 #endif
 
   struct vm_rg_struct *area = get_vm_area_node_at_brk(caller, vmaid, alignedsize);
-  int incpgnum = (int)(alignedsize / PAGING_PAGESZ);
   
 
   /* 
@@ -151,7 +148,7 @@ int inc_vma_limit(struct pcb_t *caller, int vmaid, addr_t inc_sz)
    *   return -1;  //Overlap and failed allocation 
    */
 
-  if (validate_overlap_vm_area(caller, vmaid, area->rg_start, area->rg_end) < 0 && cur_vma->vm_start != cur_vma->vm_end){
+  if (validate_overlap_vm_area(caller, vmaid, area->rg_start, area->rg_end) < 0){
     free(area);
     return -1;
   }
