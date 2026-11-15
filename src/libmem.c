@@ -530,11 +530,22 @@ int libkmem_copy_from_user(struct pcb_t *caller, uint32_t source, uint32_t desti
 {
   /* TODO: provide OS level management kmem
    */
+
+  struct vm_rg_struct *dest_rg = get_symrg_byid(caller->mm, destination);
+  if (dest_rg == NULL || (dest_rg->rg_start == 0 && dest_rg->rg_end == 0)) {
+    addr_t addr = 0;
+    __kmalloc(caller, 0, destination, offset + size, &addr);
+  }
+
   /*
    * TODO: Map kernel address range
    */
-  //__read_user_mem(...)
-  //__write_kernel_mem(...);
+  for (uint32_t i = 0; i < size; i++) {
+    BYTE data = 0;
+
+    __read_user_mem(caller, 0, source, offset + i, &data);
+    __write_kernel_mem(caller, 0, destination, offset + i, data);
+  }
 
   return 0;
 }
@@ -543,13 +554,22 @@ int libkmem_copy_to_user(struct pcb_t *caller, uint32_t source, uint32_t destina
 {
   /* TODO: provide OS level management kmem
    */
+
+  struct vm_rg_struct *dest_rg = get_symrg_byid(caller->mm, destination);
+  if (dest_rg == NULL || (dest_rg->rg_start == 0 && dest_rg->rg_end == 0)) {
+    addr_t addr = 0;
+    __alloc(caller, 0, destination, offset + size, &addr);
+  }
+
   /*
    * TODO: Map kernel address range
    */
-  //__read_kernel_mem(...)
-  //__write_user_mem(...);
-
-  return 1;
+  for (uint32_t i = 0; i < size; i++) {
+    BYTE data = 0;
+      __read_kernel_mem(caller, 0, source, offset + i, &data);
+      __write_user_mem(caller, 0, destination, offset + i, data);
+  }
+  return 0;
 }
 
 
