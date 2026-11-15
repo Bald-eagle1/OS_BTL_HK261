@@ -171,10 +171,18 @@ int __free(struct pcb_t *caller, int vmaid, int rgid)
 int liballoc(struct pcb_t *proc, addr_t size, uint32_t reg_index)
 {
   addr_t  addr;
-  int val = __alloc(proc, 0, reg_index, size, &addr);
-  if (val == -1)
+  int target_vmaid = 0;
+
+  if (size >= 4096) {
+    target_vmaid = 1;
+  }
+  else {
+    target_vmaid = 0;
+  }
+  int val = __alloc(proc, target_vmaid, reg_index, size, &addr);
+  if (val != -1 && reg_index < 10) 
   {
-    return -1;
+    proc->regs[reg_index] = addr;
   }
 #ifdef IODUMP
   /* TODO dump IO content (if needed) */

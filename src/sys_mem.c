@@ -30,8 +30,8 @@ int __sys_memmap(struct krnl_t *krnl, uint32_t pid, struct sc_regs* regs)
     * TODO THIS DUMMY CREATE EMPTY PROC TO AVOID COMPILER NOTIFY 
     *      need to be eliminated
 	*/
-   struct pcb_t *caller = malloc(sizeof(struct pcb_t));
-   caller->krnl = malloc(sizeof(struct krnl_t));
+   // struct pcb_t *caller = malloc(sizeof(struct pcb_t));
+   // caller->krnl = malloc(sizeof(struct krnl_t));
 
    /*
     * @bksysnet: Please note in the dual spacing design
@@ -41,6 +41,16 @@ int __sys_memmap(struct krnl_t *krnl, uint32_t pid, struct sc_regs* regs)
    /* TODO: Traverse proclist to terminate the proc
     *       stcmp to check the process match proc_name
     */
+   
+    struct pcb_t *caller = NULL;
+    for (int i = 0; i < krnl->running_list->size; i++) 
+    {
+        if (krnl->running_list->proc[i]->pid == pid)
+        {
+            caller = krnl->running_list->proc[i];
+            break;
+        }
+    }
 
     /* TODO Maching and marking the process */
     /* user process are not allowed to access directly pcb in kernel space of syscall */
