@@ -79,6 +79,7 @@ int __alloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t *allo
   {
     caller->mm->symrgtbl[rgid].rg_start = rgnode.rg_start;
     caller->mm->symrgtbl[rgid].rg_end = rgnode.rg_end;
+    caller->mm->symrgtbl[rgid].vmaid = vmaid;
  
     *alloc_addr = rgnode.rg_start;
 
@@ -115,6 +116,7 @@ int __alloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t *allo
   /*Successful increase limit */
   caller->mm->symrgtbl[rgid].rg_start = old_sbrk;
   caller->mm->symrgtbl[rgid].rg_end = old_sbrk + size;
+  caller->mm->symrgtbl[rgid].vmaid = vmaid;
 
   *alloc_addr = old_sbrk;
 
@@ -163,6 +165,142 @@ int __free(struct pcb_t *caller, int vmaid, int rgid)
   return 0;
 }
 
+/*
+ * alloc_large_vma_macos - allocate a new vma for rg >= 4096 bytes
+ */
+int alloc_large_vma_macos(struct pcb_t *caller, addr_t size, int rgid, addr_t *alloc_addr)
+{
+  pthread_mutex_lock(&mmvm_lock);
+  addr_t pagesz = PAGING64_PAGESZ;
+  addr_t aligned_size = ((size + pagesz - 1) / pagesz) * pagesz;
+  int incpgnum = (int)(aligned_size / pagesz);
+
+  int next_id = 3;
+  struct vm_area_struct *p = caller->mm->mmap;
+  while (p != NULL) {
+    if ((int)p->vm_id >= next_id) {
+      next_id = p->vm_id + 1;
+    }
+    p = p->vm_next;
+  }
+
+  addr_t hole_start = 0;
+  addr_t cur_candidate = 0x100000;
+  struct vm_area_struct *cur = caller->mm->mmap;
+  while (cur != NULL) {
+    if (cur->vm_end <= cur_candidate) {
+      cur = cur->vm_next;
+      continue;
+    }
+    if (cur->vm_start > cur_candidate) {
+      if (cur->vm_start - cur_candidate >= aligned_size) {
+        hole_start = cur_candidate;
+        break;
+      }
+    }
+    if (cur->vm_end > cur_candidate) {
+      cur_candidate = ((cur->vm_end + pagesz - 1) / pagesz) * pagesz;
+    }
+    cur = cur->vm_next;
+  }
+
+  if (hole_start == 0 && (0xbfffe000 > cur_candidate) && (0xbfffe000 - cur_candidate >= aligned_size)) {
+    hole_start = cur_candidate;
+  }
+  if (hole_start == 0) {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1; // Hết địa chỉ ảo
+  }
+  struct vm_area_struct *large_vma = malloc(sizeof(struct vm_area_struct));
+  if (large_vma == NULL) {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
+  large_vma->vm_id = next_id;
+  large_vma->vm_start = hole_start;
+  large_vma->vm_end = hole_start + aligned_size;
+  large_vma->sbrk = large_vma->vm_end;
+  large_vma->vm_mm = caller->mm;
+  large_vma->vm_freerg_list = NULL;
+  large_vma->vm_next = NULL;
+
+  insert_vma_sorted(caller->mm, large_vma);
+
+  struct vm_rg_struct mapped_rg;
+  if (vm_map_ram(caller, large_vma->vm_start, large_vma->vm_end, large_vma->vm_start, incpgnum, &mapped_rg) < 0) {
+
+    struct vm_area_struct *prev = NULL, *scan = caller->mm->mmap;
+    while (scan != NULL && scan != large_vma) {
+      prev = scan;
+      scan = scan->vm_next;
+    }
+    if (scan == large_vma) {
+      if (prev == NULL) caller->mm->mmap = scan->vm_next;
+      else prev->vm_next = scan->vm_next;
+    }
+    free(large_vma);
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
+  caller->mm->symrgtbl[rgid].rg_start = large_vma->vm_start;
+  caller->mm->symrgtbl[rgid].rg_end   = large_vma->vm_start + size;
+  caller->mm->symrgtbl[rgid].vmaid    = large_vma->vm_id;
+  *alloc_addr = large_vma->vm_start;
+  pthread_mutex_unlock(&mmvm_lock);
+  return 0;
+}
+
+/*
+ * free_large_vma_macos - free a vma and return frame
+ */
+int free_large_vma_macos(struct pcb_t *caller, int rgid)
+{
+  if (caller == NULL || caller->mm == NULL || rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ)
+    return -1;
+  pthread_mutex_lock(&mmvm_lock);
+  struct vm_rg_struct *rgnode = get_symrg_byid(caller->mm, rgid);
+  if (rgnode == NULL || (rgnode->rg_start == 0 && rgnode->rg_end == 0)) {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
+  int target_vmaid = rgnode->vmaid;
+
+  struct vm_area_struct *prev = NULL;
+  struct vm_area_struct *cur = caller->mm->mmap;
+  while (cur != NULL && (int)cur->vm_id != target_vmaid) {
+    prev = cur;
+    cur = cur->vm_next;
+  }
+  if (cur == NULL) {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
+  if (prev == NULL) {
+    caller->mm->mmap = cur->vm_next;
+  } else {
+    prev->vm_next = cur->vm_next;
+  }
+
+  addr_t pagesz = PAGING64_PAGESZ;
+  int pgnum = (int)((cur->vm_end - cur->vm_start) / pagesz);
+  for (int pgit = 0; pgit < pgnum; pgit++) {
+    addr_t pgn = (cur->vm_start + (addr_t)pgit * pagesz) >> PAGING64_ADDR_PT_SHIFT;
+    uint64_t pte = pte_get_entry(caller->mm, pgn, caller);
+    if (PAGING_PAGE_PRESENT(pte)) {
+      addr_t fpn = PAGING_PTE_FPN(pte);
+      MEMPHY_put_freefp(caller->krnl->mram, fpn);
+    }
+  }
+
+  rgnode->rg_start = 0;
+  rgnode->rg_end   = 0;
+  rgnode->vmaid    = -1;
+
+  free(cur);
+  pthread_mutex_unlock(&mmvm_lock);
+  return 0;
+}
+
 /*liballoc - PAGING-based allocate a region memory
  *@proc:  Process executing the instruction
  *@size: allocated size
@@ -171,19 +309,19 @@ int __free(struct pcb_t *caller, int vmaid, int rgid)
 int liballoc(struct pcb_t *proc, addr_t size, uint32_t reg_index)
 {
   addr_t  addr;
-  int target_vmaid = 0;
+  int val;
 
-  if (size >= 4096) {
-    target_vmaid = 1;
+  if (size >= PAGING64_PAGESZ) {
+    val = alloc_large_vma_macos(proc, size, reg_index, &addr);
   }
   else {
-    target_vmaid = 0;
+    val = __alloc(proc, 0, reg_index, &addr);
   }
-  int val = __alloc(proc, target_vmaid, reg_index, size, &addr);
   if (val != -1 && reg_index < 10) 
   {
     proc->regs[reg_index] = addr;
   }
+
 #ifdef IODUMP
   /* TODO dump IO content (if needed) */
 #ifdef PAGETBL_DUMP
@@ -203,12 +341,23 @@ int liballoc(struct pcb_t *proc, addr_t size, uint32_t reg_index)
 
 int libfree(struct pcb_t *proc, uint32_t reg_index)
 {
-  int val = __free(proc, 0, reg_index);
+  struct vm_rg_struct *rgnode = get_symrg_byid(proc->mm, reg_index);
+  int val;
+
+  if (rgnode->vmaid >= 3) {
+    val = free_large_vma_macos(proc, reg_index);
+  }
+  else {
+    val = __free(proc, 0, reg_index);
+  }
+
+
   if (val == -1)
   {
     return -1;
   }
-printf("%s:%d\n",__func__,__LINE__);
+
+// printf("%s:%d\n",__func__,__LINE__);
 #ifdef IODUMP
   /* TODO dump IO content (if needed) */
 #ifdef PAGETBL_DUMP

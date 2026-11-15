@@ -107,6 +107,7 @@ struct vm_rg_struct * init_vm_rg(addr_t rg_start, addr_t rg_end);
 int enlist_vm_rg_node(struct vm_rg_struct **rglist, struct vm_rg_struct* rgnode);
 int enlist_pgn_node(struct pgn_t **pgnlist, addr_t pgn);
 int vmap_pgd_memset(struct pcb_t *caller, addr_t addr, int pgnum);
+int insert_vma_sorted(struct mm_struct *mm, struct vm_area_struct *new_vma);
 addr_t vmap_page_range(struct pcb_t *caller, addr_t addr, int pgnum, 
                     struct framephy_struct *frames, struct vm_rg_struct *ret_rg);
 addr_t vm_map_ram(struct pcb_t *caller, addr_t astart, addr_t aend, addr_t mapstart, int incpgnum, struct vm_rg_struct *ret_rg);
