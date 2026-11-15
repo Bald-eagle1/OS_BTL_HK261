@@ -267,15 +267,14 @@ addr_t vmap_page_range(struct pcb_t *caller,           // process call
                     struct framephy_struct *frames, // list of the mapped frames
                     struct vm_rg_struct *ret_rg)    // return mapped region, the real mapped fp
 {                                                   // no guarantee all given pages are mapped
-//struct framephy_struct *fpit;
-//int pgit = 0;
-//addr_t pgn;
+  struct framephy_struct *fpit = frames;
+  int pgit = 0;
+  addr_t pgn;
 
-  /* TODO: update the rg_end and rg_start of ret_rg 
-  //ret_rg->rg_end =  ....
-  //ret_rg->rg_start = ...
-  //ret_rg->vmaid = ...
-  */
+  // TODO: update the rg_end and rg_start of ret_rg 
+  ret_rg->rg_end =  addr + pgnum * PAGING64_PAGESZ;
+  ret_rg->rg_start = addr;
+  ret_rg->vmaid = 0;
 
   /* TODO map range of frame to address space
    *      [addr to addr + pgnum*PAGING_PAGESZ
@@ -284,9 +283,12 @@ addr_t vmap_page_range(struct pcb_t *caller,           // process call
    *                    ...
    */
 
-  /* Tracking for later page replacement activities (if needed)
-   * Enqueue new usage page */
-  //enlist_pgn_node(&caller->krnl->mm->fifo_pgn, pgn64 + pgit);
+  for(pgit = 0; pgit < pgnum; pgit++) {
+    pgn = (addr + pgit * PAGING64_PAGESZ) >> PAGING64_ADDR_PT_SHIFT;
+    pte_set_fpn(caller->mm, pgn, fpit->fpn, caller);
+    enlist_pgn_node(&caller->mm->fifo_pgn, pgn);
+    fpit = fpit->fp_next;
+  }
 
   return 0;
 }
@@ -300,31 +302,26 @@ addr_t vmap_page_range(struct pcb_t *caller,           // process call
 
 addr_t alloc_pages_range(struct pcb_t *caller, int req_pgnum, struct framephy_struct **frm_lst)
 {
-  //addr_t fpn;
-  //int pgit;
-  //struct framephy_struct *newfp_str = NULL;
-  //struct framephy_struct **cur = frm_lst;
+  addr_t fpn;
+  int pgit;
+  struct framephy_struct *newfp_str = NULL;
 
-  /* TODO: allocate the page 
-  //caller-> ...
-  //frm_lst-> ...
-  */
-
-
-/*
   for (pgit = 0; pgit < req_pgnum; pgit++)
   {
     // TODO: allocate the page 
-    if (MEMPHY_get_freefp(caller->mram, &fpn) == 0)
+    if (MEMPHY_get_freefp(caller->krnl->mram, &fpn) == 0)
     {
+      newfp_str = malloc(sizeof(struct framephy_struct));
       newfp_str->fpn = fpn;
+      newfp_str->owner = caller->mm;
+      newfp_str->fp_next = *frm_lst;
+      *frm_lst = newfp_str;
     }
     else
     { // TODO: ERROR CODE of obtaining somes but not enough frames
+      return -3000;
     }
   }
-*/
-
 
   /* End TODO */
 
