@@ -153,6 +153,17 @@ int MEMPHY_format(struct memphy_struct *mp, int pagesz)
 
 int MEMPHY_get_freefp(struct memphy_struct *mp, addr_t *retfpn)
 {
+   if (mp == NULL || retfpn == NULL)
+      return -1;
+
+#ifdef MM64
+   if (mp->maxsz < PAGING64_PAGESZ)
+      return -1;
+#else
+   if (mp->maxsz < PAGING_PAGESZ)
+      return -1;
+#endif
+
    struct framephy_struct *fp = mp->free_fp_list;
 
    if (fp == NULL)
@@ -161,8 +172,8 @@ int MEMPHY_get_freefp(struct memphy_struct *mp, addr_t *retfpn)
    /* 
     * TODO manage free frame list
     */
-   //*retfpn ..
-   // cap nhat lai danh sach free frame
+   *retfpn = fp->fpn;
+   mp->free_fp_list = fp->fp_next;
 
    /* 
     * TODO MEMPHY is iteratively used up until its exhausted
@@ -179,6 +190,16 @@ int MEMPHY_dump(struct memphy_struct *mp)
    * TODO dump memphy contnt mp->storage
    *     for tracing the memory content
    */
+   if (mp == NULL || mp->storage == NULL)
+      return -1;
+
+   for (int i = 0; i < mp->maxsz; i++)
+   {
+      if (mp->storage[i] != 0)
+      {
+         printf("BYTE %08x: %d\n", i, mp->storage[i]);
+      }
+   }
 
    return 0;
 }
