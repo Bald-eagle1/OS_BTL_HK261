@@ -52,26 +52,18 @@ struct pcb_t *purgequeue(struct queue_t *q, struct pcb_t *proc)
         if(empty(q) || proc == NULL)
                 return NULL;
 
-        for(int i = 0;i < q->size; i++)
+        for(int i = 0; i < q->size; i++)
         {       
                 if(q->proc[i] == proc)
-                        return removeFromQueue(q, i);
+                {
+                        for(int j = i; j < q->size - 1; j++)
+                                q->proc[j] = q->proc[j+1];
+
+                        q->size--;
+                        return proc;
+                }
+
         }
 
         return NULL;
-}
-
-// Student's functions
-struct pcb_t *removeFromQueue(struct queue_t * q, int index)
-{
-        if(empty(q) || (index < 0) || index >= q->size)
-                return NULL;
-
-        struct pcb_t * proc = q->proc[index];
-
-        for(int i = index; i < q->size - 1; i++)
-                q->proc[i] = q->proc[i+1];
-
-        q->size--;
-        return proc;
 }
