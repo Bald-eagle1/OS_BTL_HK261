@@ -97,8 +97,7 @@ struct pcb_t * get_mlq_proc(void) {
 		}
 	}
 
-	if (proc != NULL)
-		enqueue(&running_list, proc);
+	enqueue(&running_list, proc);
 
 	pthread_mutex_unlock(&queue_lock);
 	return proc;	
@@ -106,9 +105,6 @@ struct pcb_t * get_mlq_proc(void) {
 
 
 void put_mlq_proc(struct pcb_t * proc) {
-	if(proc == NULL)
-		return;
-
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->mlq_ready_queue = mlq_ready_queue;
 	proc->krnl->running_list = &running_list;
@@ -120,15 +116,11 @@ void put_mlq_proc(struct pcb_t * proc) {
 
 	pthread_mutex_lock(&queue_lock);
 	purgequeue(&running_list, proc);
-	proc->prio = proc->prio >= MAX_PRIO ? MAX_PRIO - 1 : proc->prio;
 	enqueue(&mlq_ready_queue[proc->prio], proc);
 	pthread_mutex_unlock(&queue_lock);
 }
 
 void add_mlq_proc(struct pcb_t * proc) {
-	if(proc == NULL)
-		return;
-
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->mlq_ready_queue = mlq_ready_queue;
 	proc->krnl->running_list = &running_list;
@@ -139,7 +131,6 @@ void add_mlq_proc(struct pcb_t * proc) {
 	 */
        
 	pthread_mutex_lock(&queue_lock);
-	proc->prio = proc->prio >= MAX_PRIO ? MAX_PRIO - 1 : proc->prio;
 	enqueue(&mlq_ready_queue[proc->prio], proc);
 	pthread_mutex_unlock(&queue_lock);	
 }
@@ -164,26 +155,13 @@ struct pcb_t * get_proc(void) {
 	 *       It worth to protect by a mechanism.
 	 * 
 	 */
-
-	if(empty(&ready_queue))
-	{
-		while(!empty(&run_queue))
-			enqueue(&ready_queue, dequeue(&run_queue));
-	}
-
-	proc = dequeue(&ready_queue);
-	if(proc != NULL)
-		enqueue(&running_list, proc);
-
+	proc = dequeue(&ready_queue)
 	pthread_mutex_unlock(&queue_lock);
 
 	return proc;
 }
 
 void put_proc(struct pcb_t * proc) {
-	if(proc == NULL)
-		return;
-	
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->running_list = &running_list;
 
@@ -193,14 +171,11 @@ void put_proc(struct pcb_t * proc) {
 	 */
 
 	pthread_mutex_lock(&queue_lock);
-	purgequeue(&running_list, proc);
 	enqueue(&run_queue, proc);
 	pthread_mutex_unlock(&queue_lock);
 }
 
 void add_proc(struct pcb_t * proc) {
-	if(proc == NULL)
-		return;
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->running_list = &running_list;
 

@@ -6,7 +6,7 @@ int empty(struct queue_t *q)
 {
         if (q == NULL)
                 return 1;
-        return (q->size == 0);
+        return q->size == 0;
 }
 
 void enqueue(struct queue_t *q, struct pcb_t *proc)
@@ -30,19 +30,10 @@ struct pcb_t *dequeue(struct queue_t *q)
         if(empty(q))
                 return NULL;
 
-        struct pcb_t *curr_proc = q->proc[0];
+        struct pcb_t *high_prio_proc = q->proc[0];
 
-        #ifndef MLQ_SCHED
-
-        for(int i = 1;i<q->size;i++)
-        {
-                if(curr_proc->priority > q->proc[i]->priority)
-                        curr_proc = q->proc[i];
-        }
-
-        #endif
-
-        return purgequeue(q, curr_proc);
+        purgequeue(q, high_prio_proc);
+        return high_prio_proc;
 }
 
 struct pcb_t *purgequeue(struct queue_t *q, struct pcb_t *proc)
@@ -56,7 +47,7 @@ struct pcb_t *purgequeue(struct queue_t *q, struct pcb_t *proc)
         {       
                 if(q->proc[i] == proc)
                 {
-                        for(int j = i; j < q->size - 1; j++)
+                        for(int j = i; j < q->size ; j++)
                                 q->proc[j] = q->proc[j+1];
 
                         q->size--;
