@@ -25,6 +25,17 @@
  *  @mp: memphy struct
  *  @offset: offset
  */
+static unsigned char frame_list_lock;
+
+static void lock_frame_list(void) {
+   while (__atomic_test_and_set(&frame_list_lock, __ATOMIC_ACQUIRE)) {}
+}
+static void unlock_frame_list(void) {
+   __atomic_clear(&frame_list_lock, __ATOMIC_RELEASE);
+}
+void lock_ram_storage(void);
+void unlock_ram_storage(void);
+
 int MEMPHY_mv_csr(struct memphy_struct *mp, addr_t offset)
 {
    int numstep = 0;
@@ -54,8 +65,10 @@ int MEMPHY_seq_read(struct memphy_struct *mp, addr_t addr, BYTE *value)
    if (!mp->rdmflg)
       return -1; /* Not compatible mode for sequential read */
 
+   lock_ram_storage();
    MEMPHY_mv_csr(mp, addr);
    *value = (BYTE)mp->storage[addr];
+   unlock_ram_storage();
 
    return 0;
 }
@@ -72,7 +85,11 @@ int MEMPHY_read(struct memphy_struct *mp, addr_t addr, BYTE *value)
       return -1;
 
    if (mp->rdmflg)
+   {
+      lock_ram_storage();
       *value = mp->storage[addr];
+      unlock_ram_storage();
+   }
    else /* Sequential access device */
       return MEMPHY_seq_read(mp, addr, value);
 
@@ -94,8 +111,10 @@ int MEMPHY_seq_write(struct memphy_struct *mp, addr_t addr, BYTE value)
    if (!mp->rdmflg)
       return -1; /* Not compatible mode for sequential read */
 
+   lock_ram_storage();
    MEMPHY_mv_csr(mp, addr);
    mp->storage[addr] = value;
+   unlock_ram_storage();
 
    return 0;
 }
@@ -112,7 +131,11 @@ int MEMPHY_write(struct memphy_struct *mp, addr_t addr, BYTE data)
       return -1;
 
    if (mp->rdmflg)
+   {
+      lock_ram_storage();
       mp->storage[addr] = data;
+      unlock_ram_storage();
+   }
    else /* Sequential access device */
       return MEMPHY_seq_write(mp, addr, data);
 
@@ -135,6 +158,7 @@ int MEMPHY_format(struct memphy_struct *mp, int pagesz)
 
    /* Init head of free framephy list */
    fst = malloc(sizeof(struct framephy_struct));
+   fst->fp_next = NULL;
    fst->fpn = iter;
    mp->free_fp_list = fst;
 
@@ -153,10 +177,18 @@ int MEMPHY_format(struct memphy_struct *mp, int pagesz)
 
 int MEMPHY_get_freefp(struct memphy_struct *mp, addr_t *retfpn)
 {
+   lock_frame_list();
    struct framephy_struct *fp = mp->free_fp_list;
 
    if (fp == NULL)
+   {
+      unlock_frame_list();
       return -1;
+   }
+
+   *retfpn = fp->fpn;
+   mp->free_fp_list = fp->fp_next;
+   unlock_frame_list();
 
    /* 
     * TODO manage free frame list
@@ -185,13 +217,21 @@ int MEMPHY_dump(struct memphy_struct *mp)
 
 int MEMPHY_put_freefp(struct memphy_struct *mp, addr_t fpn)
 {
+   lock_frame_list();
    struct framephy_struct *fp = mp->free_fp_list;
    struct framephy_struct *newnode = malloc(sizeof(struct framephy_struct));
+
+   if (newnode == NULL)
+   {
+      unlock_frame_list();
+      return -1;
+   }
 
    /* Create new node with value fpn */
    newnode->fpn = fpn;
    newnode->fp_next = fp;
    mp->free_fp_list = newnode;
+   unlock_frame_list();
 
    return 0;
 }
@@ -201,6 +241,8 @@ int MEMPHY_put_freefp(struct memphy_struct *mp, addr_t fpn)
  */
 int init_memphy(struct memphy_struct *mp, addr_t max_size, int randomflg)
 {
+   mp->free_fp_list = NULL;
+   mp->used_fp_list = NULL;
    mp->storage = (BYTE *)malloc(max_size * sizeof(BYTE));
    mp->maxsz = max_size;
    memset(mp->storage, 0, max_size * sizeof(BYTE));

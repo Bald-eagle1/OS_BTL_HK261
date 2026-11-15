@@ -24,7 +24,21 @@ static struct queue_t mlq_ready_queue[MAX_PRIO];
 static int slot[MAX_PRIO];
 #endif
 
+void retire_proc(struct pcb_t *proc) {
+	pthread_mutex_lock(&queue_lock);
+	purgequeue(&running_list, proc);
+	pthread_mutex_unlock(&queue_lock);
+}
+
+/* Keep the original early returns while releasing their lock. */
+static void release_queue_lock(pthread_mutex_t **lock) {
+	pthread_mutex_unlock(*lock);
+}
+
 int queue_empty(void) {
+	pthread_mutex_lock(&queue_lock);
+	pthread_mutex_t *held_queue_lock
+		__attribute__((cleanup(release_queue_lock))) = &queue_lock;
 #ifdef MLQ_SCHED
 	unsigned long prio;
 	for (prio = 0; prio < MAX_PRIO; prio++)
@@ -105,9 +119,11 @@ struct pcb_t * get_mlq_proc(void) {
 
 
 void put_mlq_proc(struct pcb_t * proc) {
+	pthread_mutex_lock(&queue_lock);
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->mlq_ready_queue = mlq_ready_queue;
 	proc->krnl->running_list = &running_list;
+	pthread_mutex_unlock(&queue_lock);
 
 	/* TODO: put running proc to running_list 
 	 *       It worth to protect by a mechanism.
@@ -121,9 +137,11 @@ void put_mlq_proc(struct pcb_t * proc) {
 }
 
 void add_mlq_proc(struct pcb_t * proc) {
+	pthread_mutex_lock(&queue_lock);
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->mlq_ready_queue = mlq_ready_queue;
 	proc->krnl->running_list = &running_list;
+	pthread_mutex_unlock(&queue_lock);
 
 	/* TODO: put running proc to running_list
 	 *       It worth to protect by a mechanism.
@@ -162,8 +180,10 @@ struct pcb_t * get_proc(void) {
 }
 
 void put_proc(struct pcb_t * proc) {
+	pthread_mutex_lock(&queue_lock);
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->running_list = &running_list;
+	pthread_mutex_unlock(&queue_lock);
 
 	/* TODO: put running proc to running_list 
 	 *       It worth to protect by a mechanism.
@@ -176,8 +196,10 @@ void put_proc(struct pcb_t * proc) {
 }
 
 void add_proc(struct pcb_t * proc) {
+	pthread_mutex_lock(&queue_lock);
 	proc->krnl->ready_queue = &ready_queue;
 	proc->krnl->running_list = &running_list;
+	pthread_mutex_unlock(&queue_lock);
 
 	/* TODO: put running proc to running_list 
 	 *       It worth to protect by a mechanism.

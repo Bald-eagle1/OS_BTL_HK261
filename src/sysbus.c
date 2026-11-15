@@ -17,6 +17,16 @@
 #include <pthread.h>
 #include "sysbus.h"
 
+static unsigned char ram_storage_lock;
+
+/* The lock is held only for one RAM access. */
+void lock_ram_storage(void) {
+    while (__atomic_test_and_set(&ram_storage_lock, __ATOMIC_ACQUIRE)) {}
+}
+void unlock_ram_storage(void) {
+    __atomic_clear(&ram_storage_lock, __ATOMIC_RELEASE);
+}
+
 // Maximum number of memory banks supported
 #define MAX_MEMORY_BANKS 8
 
@@ -175,7 +185,9 @@ int dpi_bank_read32_legacy(long long offset) {
     //fflush(stdout);
     
     if (src != NULL) {
+        lock_ram_storage();
         memcpy(&data, src, 4);
+        unlock_ram_storage();
     }
 
     return  *((uint32_t*)data);
@@ -189,7 +201,9 @@ int dpi_bank_write32_legacy(long long offset, int value) {
     //printf("MEM WRITE RESULT: Address=%p, Write data=%x, Write rc=0, Readback=%x, Match=1\n",
     //        (void*)((size_t)offset), *(unsigned int*)&value, *(unsigned int*)&value);
     if (dst != NULL) {
+        lock_ram_storage();
         memcpy(dst,  &value, 4);
+        unlock_ram_storage();
     }
     //fflush(stdout);
        
