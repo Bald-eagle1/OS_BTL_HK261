@@ -16,8 +16,8 @@
 #include "mm64.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
-#include <stdlib.h>
 
 #if defined(MM64)
 
