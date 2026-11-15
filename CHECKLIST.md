@@ -8,8 +8,8 @@
 
 | Module | Status | Progress | Notes |
 | :--- | :---: | :---: | :--- |
-| **1. Scheduler & MLQ Policy** | 🟡 In Progress | ~40% | Queue operations implemented; MLQ slot algorithm in `sched.c` pending. |
-| **2. Memory Management (64-bit Paging)** | 🔴 Action Required | ~35% | Compilation error in `mm64.c` (`PAGING64_PAGESZ_LOBIT`); page table linking needs repair. |
+| **1. Scheduler & MLQ Policy** | 🟡 In Progress | ~40% | Queue ops implemented on `scheduler` branch (unmerged on `main`); MLQ dispatch in `sched.c` pending. |
+| **2. Memory Management (64-bit Paging)** | 🔴 Action Required | ~35% | Compile error in `mm64.c`, `caller->mm` vs `caller->krnl->mm` mismatch, and page table linking bugs. |
 | **3. Co-processor & DMA** | 🟢 Completed | 100% | Standalone testbench verified; asynchronous worker and bus addressing connected. |
 | **4. System Call Interface** | ⚪ Pending | ~10% | PID-to-PCB resolution in `sys_mem.c` pending. |
 | **5. Synchronization & Locking** | 🟡 In Progress | ~50% | DMA and memory locks active; queue and physical memory locks need audit. |
@@ -20,13 +20,14 @@
 ## 1. Scheduler Subsystem (Section 2.1)
 
 ### Priority Queues (`include/queue.h`, `src/queue.c`)
-- [x] Implement `empty(struct queue_t *q)` check.
-- [x] Implement `enqueue(struct queue_t *q, struct pcb_t *proc)` with capacity boundary check (`MAX_QUEUE_SIZE`).
-- [x] Implement `dequeue(struct queue_t *q)`:
-  - [x] FIFO order for Multi-Level Queue (MLQ) mode.
-  - [x] Highest-priority extraction for non-MLQ fallback mode.
-- [x] Implement `purgequeue(struct queue_t *q, struct pcb_t *proc)` to remove a specific PCB.
-- [x] Implement element shifting in `removeFromQueue()` to maintain contiguous array order.
+- [x] Implement `empty(struct queue_t *q)` check (on `main`).
+- [ ] **Merge `scheduler` branch into `main`** (`src/queue.c` on `main` still contains empty `TODO` stubs; the items below are completed on `origin/scheduler`):
+  - [x] Implement `enqueue(struct queue_t *q, struct pcb_t *proc)` with capacity boundary check (`MAX_QUEUE_SIZE`).
+  - [x] Implement `dequeue(struct queue_t *q)`:
+    - [x] FIFO order for Multi-Level Queue (MLQ) mode.
+    - [x] Highest-priority extraction for non-MLQ fallback mode.
+  - [x] Implement `purgequeue(struct queue_t *q, struct pcb_t *proc)` to remove a specific PCB.
+  - [x] Implement element shifting in `removeFromQueue()` to maintain contiguous array order.
 
 ### Multi-Level Queue (MLQ) Engine (`src/sched.c`)
 - [x] Initialize MLQ ready queues `mlq_ready_queue[MAX_PRIO]` and slot quotas `slot[i] = MAX_PRIO - i`.
@@ -37,41 +38,49 @@
   - [ ] When all active queues exhaust their slot quota (`slot[prio] == 0`), reset all slots to `MAX_PRIO - i`.
   - [ ] Add dispatched process to `running_list`.
   - [ ] Ensure `queue_lock` is properly unlocked on all exit paths.
-- [ ] Implement `put_mlq_proc()`:
-  - [ ] Re-enqueue pre-empted process back to `mlq_ready_queue[proc->prio]`.
-  - [ ] Remove from `running_list` under mutex lock.
-- [ ] Implement `add_mlq_proc()`:
-  - [ ] Add newly loaded process to `mlq_ready_queue[proc->prio]`.
-- [ ] Merge scheduler feature branch into `main`.
+- [ ] Complete `put_mlq_proc()`:
+  - [x] Re-enqueue pre-empted process back to `mlq_ready_queue[proc->prio]` under `queue_lock`.
+  - [ ] Track/remove process in `running_list` under `queue_lock`.
+- [ ] Complete `add_mlq_proc()`:
+  - [x] Add newly loaded process to `mlq_ready_queue[proc->prio]` under `queue_lock`.
+  - [ ] Track process in `running_list` if required by kernel syscall lookup.
+- [ ] Implement non-MLQ fallback `get_proc()` in `#else` block of `src/sched.c`.
 
 ---
 
 ## 2. Memory Management Subsystem (Section 2.2)
 
 ### 64-bit 5-Level Paging (`src/mm64.c`, `include/mm64.h`)
-- [ ] **[CRITICAL]** Fix compilation error in `mm64.c` (replace undeclared `PAGING64_PAGESZ_LOBIT` with `PAGING64_ADDR_PT_SHIFT` / `12`).
-- [ ] **[CRITICAL]** Fix multi-level page directory linking in `init_mm()`:
-  - Allocate and link directory hierarchy pointers (`pgd` $\rightarrow$ `p4d` $\rightarrow$ `pud` $\rightarrow$ `pmd` $\rightarrow$ `pt`) to prevent null-pointer dereferences in `pte_get_entry()`, `pte_set_fpn()`, `pte_set_swap()`, and `pte_set_entry()`.
-- [ ] Fix syntax and structure in `vmap_page_range()` (remove premature closing brace and complete VMA tracking).
+- [ ] **[CRITICAL]** Fix compilation error in `mm64.c` (lines 277, 308: replace undeclared `PAGING64_PAGESZ_LOBIT` with `PAGING64_ADDR_PT_SHIFT` / `12`).
+- [ ] **[CRITICAL]** Unify `caller->mm` vs `caller->krnl->mm` usage across `os.c`, `mm64.c`, `mm-vm.c`, and `libmem.c`:
+  - `os.c` allocates both a global `os.mm` (`caller->krnl->mm`) and a per-process `proc->mm` (`caller->mm`).
+  - Currently `__alloc()`, `__free()`, `get_free_vmrg_area()`, and `pg_getpage()` use `caller->mm`, whereas `__read()`, `__write()`, `vmap_page_range()`, `vmap_pgd_memset()`, and `pte_set_swap()` use `caller->krnl->mm`.
+- [ ] **[CRITICAL]** Fix multi-level page directory allocation and linking in `init_mm()`:
+  - Zero-initialize allocated page directory tables (`calloc`/`memset`) and dynamically allocate/link directory hierarchy pointers (`pgd` $\rightarrow$ `p4d` $\rightarrow$ `pud` $\rightarrow$ `pmd` $\rightarrow$ `pt`) so `pte_get_entry()`, `pte_set_fpn()`, `pte_set_swap()`, and `pte_set_entry()` do not dereference uninitialized/null pointers.
+- [ ] Remove dummy `pte = malloc(sizeof(addr_t));` memory leaks in `pte_set_swap()`, `pte_set_fpn()`, `pte_get_entry()`, and `pte_set_entry()` (`src/mm64.c`).
+- [x] Implement `vmap_page_range()` to map physical frames into PTEs and enqueue page numbers into `fifo_pgn` (verify `caller->mm` vs `caller->krnl->mm` consistency).
 - [ ] Complete `alloc_pages_range()`:
   - [x] Request free frames from `mram` via `MEMPHY_get_freefp()`.
-  - [ ] Handle page eviction/swap when physical RAM is exhausted.
+  - [ ] Handle partial allocation cleanup or page eviction/swap when physical RAM is exhausted (`-3000`).
 - [ ] Complete `vmap_pgd_memset()` with page directory mapping pattern.
 - [ ] Implement `print_pgtbl()` to match reference dump format (`PDG=... P4D=... PUD=... PMD=... PT=...`).
 
 ### Physical Memory Management (`src/mm-memphy.c`)
-- [ ] Fix free frame list tracking in `MEMPHY_get_freefp()`:
+- [ ] **[CRITICAL]** Fix free frame list tracking in `MEMPHY_get_freefp()`:
   - Retrieve head frame number `*retfpn = fp->fpn`.
-  - Advance `mp->free_fp_list = fp->fp_next` before freeing node.
+  - Advance `mp->free_fp_list = fp->fp_next` before calling `free(fp)`.
 - [x] Implement frame recycling in `MEMPHY_put_freefp()`.
 - [x] Implement physical read and write in `MEMPHY_read()` and `MEMPHY_write()`.
 - [ ] Implement memory dump in `MEMPHY_dump()`.
 
 ### Virtual Memory Areas & Swapping (`src/mm-vm.c`, `src/libmem.c`)
-- [ ] Define `OVERLAP(x1, x2, y1, y2)` and `INCLUDE(x1, x2, y1, y2)` range macros in `include/mm.h`.
-- [ ] Implement `inc_vma_limit()` in `mm-vm.c` to expand process virtual memory boundary (`sbrk`).
+- [x] Implement free region allocation & deallocation helpers: `get_free_vmrg_area()`, `__alloc()`, and `__free()` in `src/libmem.c` (clean up redundant `inc_sz` calculations in `__alloc()`).
+- [ ] Define `OVERLAP(x1, x2, y1, y2)` and `INCLUDE(x1, x2, y1, y2)` range macros in `include/mm.h` (currently stubbed to `(0)`).
+- [ ] Fix `validate_overlap_vm_area()` in `src/mm-vm.c` (line 114 checks `OVERLAP(cur_area->vm_start, cur_area->vm_end, ...)` instead of the planned `vmastart, vmaend` parameters).
+- [ ] Implement `inc_vma_limit()` in `mm-vm.c` to expand process virtual memory boundary (`sbrk`) and map frames via `vm_map_ram()`.
 - [ ] Implement `get_vm_area_node_at_brk()` in `mm-vm.c`.
-- [ ] Implement victim page selection in `find_victim_page()` (`src/libmem.c`) with boundary check for single-node FIFO list.
+- [ ] **[CRITICAL]** Fix single-node list crash in `find_victim_page()` (`src/libmem.c` line 671): when `mm->fifo_pgn` has only 1 node, `prev` is `NULL` and `prev->pg_next = NULL` causes a segmentation fault (handle `if (prev == NULL) mm->fifo_pgn = NULL;`).
+- [ ] **[CRITICAL]** Fix `MM64` buffer overflow in `free_pcb_memph()` (`src/libmem.c` line 629): loops `PAGING_MAX_PGN` (`16384`) on 512-entry `caller->mm->pgd[pagenum]`.
 - [ ] Complete `pg_getpage()` in `src/libmem.c` to handle page faults, swapping out victim frames (`RAM -> SWAP`) and swapping in target frames (`SWAP -> RAM`).
 - [ ] Connect `pg_getval()` and `pg_setval()` to physical I/O system calls (`SYSMEM_IO_READ`, `SYSMEM_IO_WRITE`).
 
