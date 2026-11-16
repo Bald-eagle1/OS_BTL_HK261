@@ -24,6 +24,7 @@
 
 static pthread_mutex_t mmvm_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t kmm_lock = PTHREAD_MUTEX_INITIALIZER;
+static int cur_heap_vmaid[32] = {0}; //pid
 
 /*enlist_vm_freerg_list - add new rg to freerg_list
  *@mm: memory region
@@ -79,7 +80,7 @@ int __alloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t *allo
   {
     caller->mm->symrgtbl[rgid].rg_start = rgnode.rg_start;
     caller->mm->symrgtbl[rgid].rg_end = rgnode.rg_end;
-    caller->mm->symrgtbl[rgid].vmaid = vmaid;
+    caller->mm->symrgtbl[rgid].vmaid = rgnode.vmaid;
  
     *alloc_addr = rgnode.rg_start;
 
@@ -423,10 +424,14 @@ int liballoc(struct pcb_t *proc, addr_t size, uint32_t reg_index)
     val = alloc_large_vma_macos(proc, size, reg_index, &addr);
   }
   else {
-    val = __alloc(proc, 0, reg_index, size, &addr);
+    int active_vmaid = cur_heap_vmaid[proc->pid];
+    val = __alloc(proc, active_vmaid, reg_index, size, &addr);
 
     if (val < 0) {
       val = alloc_chunk_vma(proc, size, reg_index, &addr);
+      if (val == 0) {
+        cur_heap_vmaid[proc->pid] = proc->mm->symrgtbl[reg_index].vmaid;
+      }
     }
   }
   if (val != -1 && reg_index < 10) 
@@ -622,7 +627,11 @@ int __read(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE *data)
 //struct vm_area_struct *cur_vma = get_vma_by_num(caller->krnl->mm, vmaid);
 
   /* TODO Invalid memory identify */
-
+  if (currg == NULL || (currg->rg_start == 0 && currg->rg_end == 0)) {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
+  
   if (currg->rg_start + offset >= 0xbfffe000) {
     printf("[SECURITY FAULT] Process %d denied reading Kernel space at %lx!\n", 
            caller->pid, currg->rg_start + offset);
@@ -795,7 +804,7 @@ int libmem_dma_memcpy(struct pcb_t *caller, uint32_t src, uint32_t dst, uint32_t
   //krnl->...
   //krnl->...
 
-  return do_dma(caller, (uint64_t)src, (uint64_t)dst, (uint64_t)size);
+  return 0;
 }
 
 
@@ -997,9 +1006,11 @@ int find_victim_page(struct mm_struct *mm, addr_t *retpgn)
  */
 int get_free_vmrg_area(struct pcb_t *caller, int vmaid, int size, struct vm_rg_struct *newrg)
 {
-  struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
+  // struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
 
-  struct vm_rg_struct *rgit = cur_vma->vm_freerg_list;
+  // struct vm_rg_struct *rgit = cur_vma->vm_freerg_list;
+
+  struct vm_rg_struct *rgit = caller->mm->mmap->vm_freerg_list; 
 
   if (rgit == NULL)
     return -1;
@@ -1014,6 +1025,7 @@ int get_free_vmrg_area(struct pcb_t *caller, int vmaid, int size, struct vm_rg_s
     { /* Current region has enough space */
       newrg->rg_start = rgit->rg_start;
       newrg->rg_end = rgit->rg_start + size;
+      newrg->vmaid = rgit->vmaid;
 
       /* Update left space in chosen region */
       if (rgit->rg_start + size < rgit->rg_end)
@@ -1030,7 +1042,7 @@ int get_free_vmrg_area(struct pcb_t *caller, int vmaid, int size, struct vm_rg_s
         {
           rgit->rg_start = nextrg->rg_start;
           rgit->rg_end = nextrg->rg_end;
-
+          rgit->vmaid    = nextrg->vmaid;
           rgit->rg_next = nextrg->rg_next;
 
           free(nextrg);
