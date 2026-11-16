@@ -73,7 +73,7 @@ int __alloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t *allo
   pthread_mutex_lock(&mmvm_lock);
   struct vm_rg_struct rgnode;
   struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
-  int inc_sz=0;
+  // int inc_sz=0;
 
   if (get_free_vmrg_area(caller, vmaid, size, &rgnode) == 0)
   {
@@ -90,16 +90,16 @@ int __alloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t *allo
   /* TODO get_free_vmrg_area FAILED handle the region management (Fig.6)*/
 
   /*Attempt to increate limit to get space */
-#ifdef MM64
-  inc_sz = (uint32_t)(size/(int)PAGING64_PAGESZ);
-  inc_sz = inc_sz + 1;
-#else
-  inc_sz = PAGING_PAGE_ALIGNSZ(size);
-#endif
-  int old_sbrk;
-  inc_sz = inc_sz + 1;
+// #ifdef MM64
+//   inc_sz = (uint32_t)(size/(int)PAGING64_PAGESZ);
+//   inc_sz = inc_sz + 1;
+// #else
+//   inc_sz = PAGING_PAGE_ALIGNSZ(size);
+// #endif
+//   int old_sbrk;
+//   inc_sz = inc_sz + 1;
 
-  old_sbrk = cur_vma->sbrk;
+  addr_t old_sbrk = cur_vma->sbrk;
 
   /* TODO INCREASE THE LIMIT
    * SYSCALL 1 sys_memmap
@@ -112,13 +112,27 @@ int __alloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t *allo
 #else
   regs.a3 = PAGING_PAGE_ALIGNSZ(size);
 #endif  
-  _syscall(caller->krnl, caller->pid, 17, &regs); /* SYSCALL 17 sys_memmap */
+  if (_syscall(caller->krnl, caller->pid, 17, &regs) < 0) { /* SYSCALL 17 sys_memmap */
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
   /*Successful increase limit */
   caller->mm->symrgtbl[rgid].rg_start = old_sbrk;
   caller->mm->symrgtbl[rgid].rg_end = old_sbrk + size;
   caller->mm->symrgtbl[rgid].vmaid = vmaid;
 
   *alloc_addr = old_sbrk;
+
+  if (old_sbrk + size < cur_vma->sbrk) {
+    struct vm_rg_struct *free_rg = malloc(sizeof(struct vm_rg_struct));
+    if (free_rg != NULL) {
+      free_rg->rg_start = old_sbrk + size;
+      free_rg->rg_end = cur_vma->sbrk;
+      free_rg->vmaid = vmaid;
+      free_rg->rg_next = NULL;
+      enlist_vm_freerg_list(caller->mm, free_rg);
+    }
+  }
 
   pthread_mutex_unlock(&mmvm_lock);
   return 0;
@@ -153,6 +167,7 @@ int __free(struct pcb_t *caller, int vmaid, int rgid)
   struct vm_rg_struct *freerg_node = malloc(sizeof(struct vm_rg_struct));
   freerg_node->rg_start = rgnode->rg_start;
   freerg_node->rg_end = rgnode->rg_end;
+  freerg_node->vmaid = rgnode->vmaid;
   freerg_node->rg_next = NULL;
 
   rgnode->rg_start = rgnode->rg_end = 0;
@@ -175,7 +190,7 @@ int alloc_large_vma_macos(struct pcb_t *caller, addr_t size, int rgid, addr_t *a
   addr_t aligned_size = ((size + pagesz - 1) / pagesz) * pagesz;
   int incpgnum = (int)(aligned_size / pagesz);
 
-  int next_id = 3;
+  int next_id = 1;
   struct vm_area_struct *p = caller->mm->mmap;
   while (p != NULL) {
     if ((int)p->vm_id >= next_id) {
@@ -185,7 +200,7 @@ int alloc_large_vma_macos(struct pcb_t *caller, addr_t size, int rgid, addr_t *a
   }
 
   addr_t hole_start = 0;
-  addr_t cur_candidate = 0x100000;
+  addr_t cur_candidate = 0xff000;
   struct vm_area_struct *cur = caller->mm->mmap;
   while (cur != NULL) {
     if (cur->vm_end <= cur_candidate) {
@@ -209,7 +224,7 @@ int alloc_large_vma_macos(struct pcb_t *caller, addr_t size, int rgid, addr_t *a
   }
   if (hole_start == 0) {
     pthread_mutex_unlock(&mmvm_lock);
-    return -1; // Hết địa chỉ ảo
+    return -1;
   }
   struct vm_area_struct *large_vma = malloc(sizeof(struct vm_area_struct));
   if (large_vma == NULL) {
@@ -301,6 +316,99 @@ int free_large_vma_macos(struct pcb_t *caller, int rgid)
   return 0;
 }
 
+/* alloc_chunk_vma - Cấp phát một Arena VMA 4KB bằng First-Fit cho tiny/small alloc */
+int alloc_chunk_vma(struct pcb_t *caller, addr_t size, int rgid, addr_t *alloc_addr)
+{
+  pthread_mutex_lock(&mmvm_lock);
+  addr_t pagesz = PAGING64_PAGESZ;
+  addr_t aligned_size = pagesz;
+  int incpgnum = 1;
+
+  int next_id = 1;
+  struct vm_area_struct *p = caller->mm->mmap;
+  while (p != NULL) {
+    if ((int)p->vm_id >= next_id) next_id = p->vm_id + 1;
+    p = p->vm_next;
+  }
+
+  addr_t hole_start = 0;
+  addr_t cur_candidate = 0xff000;
+  struct vm_area_struct *cur = caller->mm->mmap;
+  while (cur != NULL) {
+    if (cur->vm_end <= cur_candidate) {
+      cur = cur->vm_next;
+      continue;
+    }
+    if (cur->vm_start > cur_candidate) {
+      if (cur->vm_start - cur_candidate >= aligned_size) {
+        hole_start = cur_candidate;
+        break;
+      }
+    }
+    if (cur->vm_end > cur_candidate) {
+      cur_candidate = ((cur->vm_end + pagesz - 1) / pagesz) * pagesz;
+    }
+    cur = cur->vm_next;
+  }
+  if (hole_start == 0 && (0xbfffe000 > cur_candidate) && (0xbfffe000 - cur_candidate >= aligned_size)) {
+    hole_start = cur_candidate;
+  }
+  if (hole_start == 0) {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
+
+  struct vm_area_struct *chunk_vma = malloc(sizeof(struct vm_area_struct));
+  if (chunk_vma == NULL) {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
+  chunk_vma->vm_id = next_id;
+  chunk_vma->vm_start = hole_start;
+  chunk_vma->vm_end = hole_start + aligned_size;
+  chunk_vma->sbrk = chunk_vma->vm_end;
+  chunk_vma->vm_mm = caller->mm;
+  chunk_vma->vm_freerg_list = NULL;
+  chunk_vma->vm_next = NULL;
+
+  insert_vma_sorted(caller->mm, chunk_vma);
+
+  struct vm_rg_struct mapped_rg;
+  if (vm_map_ram(caller, chunk_vma->vm_start, chunk_vma->vm_end, chunk_vma->vm_start, incpgnum, &mapped_rg) < 0) {
+    struct vm_area_struct *prev = NULL, *scan = caller->mm->mmap;
+    while (scan != NULL && scan != chunk_vma) {
+      prev = scan;
+      scan = scan->vm_next;
+    }
+    if (scan == chunk_vma) {
+      if (prev == NULL) caller->mm->mmap = scan->vm_next;
+      else prev->vm_next = scan->vm_next;
+    }
+    free(chunk_vma);
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
+
+  caller->mm->symrgtbl[rgid].rg_start = chunk_vma->vm_start;
+  caller->mm->symrgtbl[rgid].rg_end   = chunk_vma->vm_start + size;
+  caller->mm->symrgtbl[rgid].vmaid    = chunk_vma->vm_id;
+  *alloc_addr = chunk_vma->vm_start;
+
+  if (size < aligned_size) {
+    struct vm_rg_struct *free_rg = malloc(sizeof(struct vm_rg_struct));
+    if (free_rg != NULL) {
+      free_rg->rg_start = chunk_vma->vm_start + size;
+      free_rg->rg_end   = chunk_vma->vm_end;
+      free_rg->vmaid    = chunk_vma->vm_id;
+      free_rg->rg_next  = NULL;
+      enlist_vm_freerg_list(caller->mm, free_rg); // Móc vào free list dùng chung
+    }
+  }
+
+  pthread_mutex_unlock(&mmvm_lock);
+  return 0;
+}
+
 /*liballoc - PAGING-based allocate a region memory
  *@proc:  Process executing the instruction
  *@size: allocated size
@@ -315,7 +423,11 @@ int liballoc(struct pcb_t *proc, addr_t size, uint32_t reg_index)
     val = alloc_large_vma_macos(proc, size, reg_index, &addr);
   }
   else {
-    val = __alloc(proc, 0, reg_index, &addr);
+    val = __alloc(proc, 0, reg_index, size, &addr);
+
+    if (val < 0) {
+      val = alloc_chunk_vma(proc, size, reg_index, &addr);
+    }
   }
   if (val != -1 && reg_index < 10) 
   {
@@ -344,11 +456,13 @@ int libfree(struct pcb_t *proc, uint32_t reg_index)
   struct vm_rg_struct *rgnode = get_symrg_byid(proc->mm, reg_index);
   int val;
 
-  if (rgnode->vmaid >= 3) {
+  addr_t size = rgnode->rg_end - rgnode->rg_start;
+
+  if (size >= PAGING64_PAGESZ) {
     val = free_large_vma_macos(proc, reg_index);
   }
   else {
-    val = __free(proc, 0, reg_index);
+    val = __free(proc, rgnode->vmaid, reg_index);
   }
 
 
