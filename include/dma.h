@@ -30,13 +30,6 @@ struct pcb_t;
  */
 int do_dma(struct pcb_t *caller, uint64_t source, uint64_t destination, uint64_t length);
 
-/*
- * Asynchronous DMA interface between CPU and Co-processor thread
- */
-int dma_async_submit(struct pcb_t *caller, uint64_t source, uint64_t destination, uint64_t length);
-void dma_async_worker_loop(void);
-void dma_async_shutdown(void);
-
 #ifdef __cplusplus
 }
 #endif

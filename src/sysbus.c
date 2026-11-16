@@ -14,7 +14,6 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <pthread.h>
 #include "sysbus.h"
 
 // Maximum number of memory banks supported
@@ -30,42 +29,6 @@ typedef struct {
 // Array of memory banks
 static memory_bank_t_struct g_banks[MAX_MEMORY_BANKS] = {0};
 static int g_bank_count = 0;
-
-// OS physical memory (mram->storage) bound to the system bus
-static uint8_t* g_os_mem_data = NULL;
-static size_t g_os_mem_size = 0;
-
-// DMA interrupt / completion synchronization
-static pthread_mutex_t g_dma_done_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t g_dma_done_cond = PTHREAD_COND_INITIALIZER;
-static int g_dma_done_flag = 0;
-
-void sysbus_set_os_memory(void* ptr, size_t size_bytes) {
-    g_os_mem_data = (uint8_t*)ptr;
-    g_os_mem_size = size_bytes;
-}
-
-void dma_reset_done(void) {
-    pthread_mutex_lock(&g_dma_done_mutex);
-    g_dma_done_flag = 0;
-    pthread_mutex_unlock(&g_dma_done_mutex);
-}
-
-void dma_wait_done(void) {
-    pthread_mutex_lock(&g_dma_done_mutex);
-    while (!g_dma_done_flag) {
-        pthread_cond_wait(&g_dma_done_cond, &g_dma_done_mutex);
-    }
-    pthread_mutex_unlock(&g_dma_done_mutex);
-}
-
-int dma_is_done(void) {
-    int done;
-    pthread_mutex_lock(&g_dma_done_mutex);
-    done = g_dma_done_flag;
-    pthread_mutex_unlock(&g_dma_done_mutex);
-    return done;
-}
 
 // Initialize a memory bank with given size in bytes
 memory_bank_t memory_bank_init(size_t size_bytes) {
@@ -132,29 +95,16 @@ int memory_bank_is_available(void) {
 
 // Get pointer to locate data at offset
 void* memory_bank_get_ptr(uint64_t offset) {
-    if (g_banks[0].initialized) {
-        if (offset >= g_banks[0].size) {
-            return NULL;
-        }
-        return g_banks[0].data + offset;
+    if (offset >= g_banks[0].size) {
+        return NULL;
     }
 
-    if (g_os_mem_data != NULL) {
-        if (offset >= g_os_mem_size) {
-            return NULL;
-        }
-        return g_os_mem_data + offset;
-    }
-
-    return NULL;
+    return g_banks[0].data + offset;
 }
 
 // Get bank size in bytes
 size_t memory_bank_get_size() {
-    if (g_banks[0].initialized) {
-        return g_banks[0].size;
-    }
-    return g_os_mem_size;
+    return g_banks[0].size;
 }
 
 
@@ -174,9 +124,7 @@ int dpi_bank_read32_legacy(long long offset) {
     //        (void*)((size_t)offset), *(unsigned int*)data, *(unsigned int*)data, 1);
     //fflush(stdout);
     
-    if (src != NULL) {
-        memcpy(&data, src, 4);
-    }
+    memcpy(&data, src, 4);
 
     return  *((uint32_t*)data);
 }
@@ -188,9 +136,7 @@ int dpi_bank_write32_legacy(long long offset, int value) {
     void* dst = memory_bank_get_ptr((size_t)offset);
     //printf("MEM WRITE RESULT: Address=%p, Write data=%x, Write rc=0, Readback=%x, Match=1\n",
     //        (void*)((size_t)offset), *(unsigned int*)&value, *(unsigned int*)&value);
-    if (dst != NULL) {
-        memcpy(dst,  &value, 4);
-    }
+    memcpy(dst,  &value, 4);
     //fflush(stdout);
        
     return 0;
@@ -202,11 +148,6 @@ int dpi_bank_write32_legacy(long long offset, int value) {
  */
 void dma_done_callback(void)
 {
-    pthread_mutex_lock(&g_dma_done_mutex);
-    g_dma_done_flag = 1;
-    pthread_cond_broadcast(&g_dma_done_cond);
-    pthread_mutex_unlock(&g_dma_done_mutex);
-
     printf("DMA completed\n");
     fflush(stdout);   // keep ordering vs. printf_IMPORTANT output
 }

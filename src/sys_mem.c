@@ -29,7 +29,7 @@ int __sys_memmap(struct krnl_t *krnl, uint32_t pid, struct sc_regs* regs)
    /* 
     * TODO THIS DUMMY CREATE EMPTY PROC TO AVOID COMPILER NOTIFY 
     *      need to be eliminated
-	*/
+   */
    // struct pcb_t *caller = malloc(sizeof(struct pcb_t));
    // caller->krnl = malloc(sizeof(struct krnl_t));
 
@@ -59,7 +59,7 @@ int __sys_memmap(struct krnl_t *krnl, uint32_t pid, struct sc_regs* regs)
    switch (memop) {
    case SYSMEM_MAP_OP:
             /* Reserved process case*/
-			vmap_pgd_memset(caller, regs->a2, regs->a3);
+         vmap_pgd_memset(caller, regs->a2, regs->a3);
             break;
    case SYSMEM_INC_OP:
             return inc_vma_limit(caller, regs->a2, regs->a3);   
