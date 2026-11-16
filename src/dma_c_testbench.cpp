@@ -63,6 +63,30 @@ static pthread_mutex_t g_dma_q_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_dma_q_cond = PTHREAD_COND_INITIALIZER;
 static int g_dma_worker_stop = 0;
 
+static struct pcb_t *g_dma_active_caller = NULL;
+
+/* Paging and region reuse must wait for every queued physical-address transfer. */
+extern "C" void dma_async_wait_all(void) {
+  pthread_mutex_lock(&g_dma_q_lock);
+  while (g_dma_q_head != NULL || g_dma_active_caller != NULL)
+    pthread_cond_wait(&g_dma_q_cond, &g_dma_q_lock);
+  pthread_mutex_unlock(&g_dma_q_lock);
+}
+
+/* Call before freeing a caller or reusing its memory regions. */
+extern "C" void dma_async_wait_caller(struct pcb_t *caller) {
+  if (caller == NULL) return;
+  pthread_mutex_lock(&g_dma_q_lock);
+  for (;;) {
+    bool pending = g_dma_active_caller == caller;
+    for (struct dma_async_req *req = g_dma_q_head; req != NULL; req = req->next)
+      pending = pending || req->caller == caller;
+    if (!pending) break;
+    pthread_cond_wait(&g_dma_q_cond, &g_dma_q_lock);
+  }
+  pthread_mutex_unlock(&g_dma_q_lock);
+}
+
 /*
  * dpi_dma_copy - perform DMA copy via DPI
  * src_offset: source memory offset
@@ -201,6 +225,11 @@ extern "C" int dma_async_submit(struct pcb_t *caller, uint64_t source,
   req->next = NULL;
 
   pthread_mutex_lock(&g_dma_q_lock);
+  if (g_dma_worker_stop) {
+    pthread_mutex_unlock(&g_dma_q_lock);
+    free(req);
+    return -1;
+  }
   if (g_dma_q_tail != NULL) {
     g_dma_q_tail->next = req;
     g_dma_q_tail = req;
@@ -227,6 +256,7 @@ extern "C" void dma_async_worker_loop(void) {
     }
 
     struct dma_async_req *req = g_dma_q_head;
+    g_dma_active_caller = req->caller;
     g_dma_q_head = req->next;
     if (g_dma_q_head == NULL) {
       g_dma_q_tail = NULL;
@@ -234,6 +264,10 @@ extern "C" void dma_async_worker_loop(void) {
     pthread_mutex_unlock(&g_dma_q_lock);
 
     do_dma(req->caller, req->source, req->destination, req->length);
+    pthread_mutex_lock(&g_dma_q_lock);
+    g_dma_active_caller = NULL;
+    pthread_cond_broadcast(&g_dma_q_cond);
+    pthread_mutex_unlock(&g_dma_q_lock);
     free(req);
   }
 }

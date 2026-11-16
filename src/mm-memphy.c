@@ -33,6 +33,10 @@ static void lock_frame_list(void) {
 static void unlock_frame_list(void) {
    __atomic_clear(&frame_list_lock, __ATOMIC_RELEASE);
 }
+static void release_frame_list(int *held) {
+   (void)held;
+   unlock_frame_list();
+}
 void lock_ram_storage(void);
 void unlock_ram_storage(void);
 
@@ -158,6 +162,7 @@ int MEMPHY_format(struct memphy_struct *mp, int pagesz)
 
    /* Init head of free framephy list */
    fst = malloc(sizeof(struct framephy_struct));
+   if (fst == NULL) return -1;
    fst->fp_next = NULL;
    fst->fpn = iter;
    mp->free_fp_list = fst;
@@ -178,23 +183,28 @@ int MEMPHY_format(struct memphy_struct *mp, int pagesz)
 int MEMPHY_get_freefp(struct memphy_struct *mp, addr_t *retfpn)
 {
    lock_frame_list();
+   int held_frame_lock __attribute__((cleanup(release_frame_list))) = 1;
+   if (mp == NULL || retfpn == NULL)
+      return -1;
+
+#ifdef MM64
+   if (mp->maxsz < PAGING64_PAGESZ)
+      return -1;
+#else
+   if (mp->maxsz < PAGING_PAGESZ)
+      return -1;
+#endif
+
    struct framephy_struct *fp = mp->free_fp_list;
 
    if (fp == NULL)
-   {
-      unlock_frame_list();
       return -1;
-   }
-
-   *retfpn = fp->fpn;
-   mp->free_fp_list = fp->fp_next;
-   unlock_frame_list();
 
    /* 
     * TODO manage free frame list
     */
-   //*retfpn ..
-   // cap nhat lai danh sach free frame
+   *retfpn = fp->fpn;
+   mp->free_fp_list = fp->fp_next;
 
    /* 
     * TODO MEMPHY is iteratively used up until its exhausted
@@ -211,18 +221,29 @@ int MEMPHY_dump(struct memphy_struct *mp)
    * TODO dump memphy contnt mp->storage
    *     for tracing the memory content
    */
+   if (mp == NULL || mp->storage == NULL)
+      return -1;
+
+   for (int i = 0; i < mp->maxsz; i++)
+   {
+      if (mp->storage[i] != 0)
+      {
+         printf("BYTE %08x: %d\n", i, mp->storage[i]);
+      }
+   }
 
    return 0;
 }
 
 int MEMPHY_put_freefp(struct memphy_struct *mp, addr_t fpn)
 {
+   if (mp == NULL)
+      return -1;
+
    lock_frame_list();
    struct framephy_struct *fp = mp->free_fp_list;
    struct framephy_struct *newnode = malloc(sizeof(struct framephy_struct));
-
-   if (newnode == NULL)
-   {
+   if (newnode == NULL) {
       unlock_frame_list();
       return -1;
    }
@@ -231,8 +252,8 @@ int MEMPHY_put_freefp(struct memphy_struct *mp, addr_t fpn)
    newnode->fpn = fpn;
    newnode->fp_next = fp;
    mp->free_fp_list = newnode;
-   unlock_frame_list();
 
+   unlock_frame_list();
    return 0;
 }
 
@@ -241,8 +262,6 @@ int MEMPHY_put_freefp(struct memphy_struct *mp, addr_t fpn)
  */
 int init_memphy(struct memphy_struct *mp, addr_t max_size, int randomflg)
 {
-   mp->free_fp_list = NULL;
-   mp->used_fp_list = NULL;
    mp->storage = (BYTE *)malloc(max_size * sizeof(BYTE));
    mp->maxsz = max_size;
    memset(mp->storage, 0, max_size * sizeof(BYTE));

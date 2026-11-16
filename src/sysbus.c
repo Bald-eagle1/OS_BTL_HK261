@@ -176,6 +176,9 @@ extern "C" {
  * DPI Callback: Called from RTL when DMA read access
  */
 int dpi_bank_read32_legacy(long long offset) {
+    if (offset < 0 || memory_bank_get_size() < 4 ||
+        (uint64_t)offset > memory_bank_get_size() - 4)
+        return 0;
     uint8_t data[4] = {0};
 
     void* src = memory_bank_get_ptr((size_t)offset);
@@ -197,6 +200,9 @@ int dpi_bank_read32_legacy(long long offset) {
  * DPI Callback: Called from RTL when DMA write access
  */
 int dpi_bank_write32_legacy(long long offset, int value) {
+    if (offset < 0 || memory_bank_get_size() < 4 ||
+        (uint64_t)offset > memory_bank_get_size() - 4)
+        return -1;
     void* dst = memory_bank_get_ptr((size_t)offset);
     //printf("MEM WRITE RESULT: Address=%p, Write data=%x, Write rc=0, Readback=%x, Match=1\n",
     //        (void*)((size_t)offset), *(unsigned int*)&value, *(unsigned int*)&value);
