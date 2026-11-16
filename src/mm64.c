@@ -433,7 +433,18 @@ int init_mm(struct mm_struct *mm, struct pcb_t *caller)
     mm->pmd[i] = (addr_t)mm->pt;
   }
 
-
+  if (caller == NULL) {
+    struct vm_area_struct *k_vma = malloc(sizeof(struct vm_area_struct));
+    k_vma->vm_id = 0;
+    k_vma->vm_start = 0xff00000000000000;
+    k_vma->vm_end = k_vma->vm_start;
+    k_vma->sbrk = k_vma->vm_start;
+    k_vma->vm_next = NULL;
+    k_vma->vm_mm = mm;
+    k_vma->vm_freerg_list = NULL;
+    mm->mmap = k_vma;
+  }
+  else {
   /* By default the owner comes with at least one vma */
   struct vm_area_struct *vma_malloc_used = malloc(sizeof(struct vm_area_struct));
   struct vm_area_struct *vma_valloc_used = malloc(sizeof(struct vm_area_struct));
@@ -447,24 +458,24 @@ int init_mm(struct mm_struct *mm, struct pcb_t *caller)
   vma_malloc_used->vm_mm = mm;
   vma_malloc_used->vm_freerg_list = NULL;
 
-  // vma_valloc_used->vm_id = 1;
-  // vma_valloc_used->vm_start = 0xff000;
-  // vma_valloc_used->vm_end = vma_valloc_used->vm_start;
-  // vma_valloc_used->sbrk = vma_valloc_used->vm_start;
-  // vma_valloc_used->vm_next = vma_stack0;
-  // vma_valloc_used->vm_mm = mm;
-  // vma_valloc_used->vm_freerg_list = NULL;
+  vma_valloc_used->vm_id = 1;
+  vma_valloc_used->vm_start = 0xff000;
+  vma_valloc_used->vm_end = vma_valloc_used->vm_start;
+  vma_valloc_used->sbrk = vma_valloc_used->vm_start;
+  vma_valloc_used->vm_next = vma_stack0;
+  vma_valloc_used->vm_mm = mm;
+  vma_valloc_used->vm_freerg_list = NULL;
 
-  // vma_stack0->vm_id = 2;
-  // vma_stack0->vm_start = 0xbfffe000;
-  // vma_stack0->vm_end = vma_stack0->vm_start;
-  // vma_stack0->sbrk = vma_stack0->vm_start;
-  // vma_stack0->vm_next = NULL;
-  // vma_stack0->vm_mm = mm;
-  // vma_stack0->vm_freerg_list = NULL;
-
+  vma_stack0->vm_id = 2;
+  vma_stack0->vm_start = 0xbfffe000;
+  vma_stack0->vm_end = vma_stack0->vm_start;
+  vma_stack0->sbrk = vma_stack0->vm_start;
+  vma_stack0->vm_next = NULL;
+  vma_stack0->vm_mm = mm;
+  vma_stack0->vm_freerg_list = NULL;
   /* TODO: update mmap */
   mm->mmap = vma_malloc_used;
+  }
   mm->fifo_pgn = NULL;
   mm->kcpooltbl = calloc(PAGING_MAX_SYMTBL_SZ, sizeof(struct kcache_pool_struct));
   for (int i = 0; i < PAGING_MAX_SYMTBL_SZ; i++) {
