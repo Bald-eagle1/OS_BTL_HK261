@@ -413,18 +413,19 @@ int init_mm(struct mm_struct *mm, struct pcb_t *caller)
   memset(mm, 0, sizeof(struct mm_struct));
 
   /* TODO init page table directory */
-  mm->pgd = calloc(PAGING_MAX_PGN, sizeof(addr_t));
-  mm->p4d = calloc(PAGING_MAX_PGN, sizeof(addr_t));
-  mm->pud = calloc(PAGING_MAX_PGN, sizeof(addr_t));
-  mm->pmd = calloc(PAGING_MAX_PGN, sizeof(addr_t));
-  mm->pt = calloc(PAGING_MAX_PGN, sizeof(addr_t));
+  mm->pgd = calloc(PAGING64_PTRS_PER_TABLE, sizeof(addr_t));
+  mm->p4d = calloc(PAGING64_PTRS_PER_TABLE, sizeof(addr_t));
+  mm->pud = calloc(PAGING64_PTRS_PER_TABLE, sizeof(addr_t));
+  mm->pmd = calloc(PAGING64_PTRS_PER_TABLE, sizeof(addr_t));
+  mm->pt  = calloc(PAGING64_PTRS_PER_TABLE, sizeof(addr_t));
+  if (mm->pgd == NULL || mm->p4d == NULL || mm->pud == NULL ||
+      mm->pmd == NULL || mm->pt == NULL)
+    return -1;
 
-  for (int i = 0; i < PAGING_MAX_PGN; i++) {
-    mm->pgd[i] = (addr_t)mm->p4d;
-    mm->p4d[i] = (addr_t)mm->pud;
-    mm->pud[i] = (addr_t)mm->pmd;
-    mm->pmd[i] = (addr_t)mm->pt;
-  }
+  mm->pgd[0] = (addr_t)mm->p4d;
+  mm->p4d[0] = (addr_t)mm->pud;
+  mm->pud[0] = (addr_t)mm->pmd;
+  mm->pmd[0] = (addr_t)mm->pt;
 
   if (caller == NULL) {
     struct vm_area_struct *k_vma = malloc(sizeof(struct vm_area_struct));
