@@ -1,9 +1,9 @@
 # Build binaries
-os
-dma_testbench
-mem
-sched
-pdg
+/os
+/dma_testbench
+/mem
+/sched
+/pdg
 
 # Object files & build outputs
 obj/
@@ -21,3 +21,6 @@ src/*.lst
 .vscode/
 .DS_Store
 Thumbs.db
+.cache/
+.clangd
+compile_commands.json

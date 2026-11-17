@@ -902,7 +902,9 @@ int libmem_dma_memcpy(struct pcb_t *caller, uint32_t src, uint32_t dst, uint32_t
   int fpn_src = -1, fpn_dst = -1;
   addr_t pgn_src = vaddr_src / PAGING64_PAGESZ;
   addr_t pgn_dst = vaddr_dst / PAGING64_PAGESZ;
-  if (is_krnl_src && caller->krnl != NULL && caller->krnl->krnl_pt != NULL &&
+  if (vaddr_src >= 0xff00000000000000ULL) {
+    bus_src = vaddr_src - 0xff00000000000000ULL;
+  } else if (is_krnl_src && caller->krnl != NULL && caller->krnl->krnl_pt != NULL &&
       pgn_src < PAGING64_MAX_PGN && PAGING_PAGE_PRESENT(caller->krnl->krnl_pt[pgn_src])) {
     fpn_src = PAGING_FPN(caller->krnl->krnl_pt[pgn_src]);
     bus_src = ((uint64_t)fpn_src * PAGING64_PAGESZ) + (vaddr_src % PAGING64_PAGESZ);
@@ -910,7 +912,9 @@ int libmem_dma_memcpy(struct pcb_t *caller, uint32_t src, uint32_t dst, uint32_t
     bus_src = ((uint64_t)fpn_src * PAGING64_PAGESZ) + (vaddr_src % PAGING64_PAGESZ);
   }
 
-  if (is_krnl_dst && caller->krnl != NULL && caller->krnl->krnl_pt != NULL &&
+  if (vaddr_dst >= 0xff00000000000000ULL) {
+    bus_dst = vaddr_dst - 0xff00000000000000ULL;
+  } else if (is_krnl_dst && caller->krnl != NULL && caller->krnl->krnl_pt != NULL &&
       pgn_dst < PAGING64_MAX_PGN && PAGING_PAGE_PRESENT(caller->krnl->krnl_pt[pgn_dst])) {
     fpn_dst = PAGING_FPN(caller->krnl->krnl_pt[pgn_dst]);
     bus_dst = ((uint64_t)fpn_dst * PAGING64_PAGESZ) + (vaddr_dst % PAGING64_PAGESZ);
