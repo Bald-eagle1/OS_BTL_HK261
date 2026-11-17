@@ -38,7 +38,7 @@ int free_data(struct pcb_t *proc, uint32_t reg_index)
 	return free_mem(proc->regs[reg_index], proc);
 }
 
-int read(
+static int read(
 	struct pcb_t *proc, // Process executing the instruction
 	uint32_t source,	// Index of source register
 	uint32_t offset,	// Source address = [source] + [offset]
@@ -57,7 +57,7 @@ int read(
 	}
 }
 
-int write(
+static int write(
 	struct pcb_t *proc,	// Process executing the instruction
 	BYTE data,		// Data to be wrttien into memory
 	uint32_t destination, // Index of destination register

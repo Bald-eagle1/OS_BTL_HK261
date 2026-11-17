@@ -19,6 +19,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+
+static pthread_mutex_t memphy_lock = PTHREAD_MUTEX_INITIALIZER;
+void lock_ram_storage(void);
+void unlock_ram_storage(void);
 
 /*
  *  MEMPHY_mv_csr - move MEMPHY cursor
@@ -71,8 +76,11 @@ int MEMPHY_read(struct memphy_struct *mp, addr_t addr, BYTE *value)
    if (mp == NULL)
       return -1;
 
-   if (mp->rdmflg)
+   if (mp->rdmflg) {
+      lock_ram_storage();
       *value = mp->storage[addr];
+      unlock_ram_storage();
+   }
    else /* Sequential access device */
       return MEMPHY_seq_read(mp, addr, value);
 
@@ -111,8 +119,11 @@ int MEMPHY_write(struct memphy_struct *mp, addr_t addr, BYTE data)
    if (mp == NULL)
       return -1;
 
-   if (mp->rdmflg)
+   if (mp->rdmflg) {
+      lock_ram_storage();
       mp->storage[addr] = data;
+      unlock_ram_storage();
+   }
    else /* Sequential access device */
       return MEMPHY_seq_write(mp, addr, data);
 
@@ -164,10 +175,13 @@ int MEMPHY_get_freefp(struct memphy_struct *mp, addr_t *retfpn)
       return -1;
 #endif
 
+   pthread_mutex_lock(&memphy_lock);
    struct framephy_struct *fp = mp->free_fp_list;
 
-   if (fp == NULL)
+   if (fp == NULL) {
+      pthread_mutex_unlock(&memphy_lock);
       return -1;
+   }
 
    /* 
     * TODO manage free frame list
@@ -180,6 +194,7 @@ int MEMPHY_get_freefp(struct memphy_struct *mp, addr_t *retfpn)
     * No garbage collector acting then it not been released
     */
    free(fp);
+   pthread_mutex_unlock(&memphy_lock);
 
    return 0;
 }
@@ -206,13 +221,18 @@ int MEMPHY_dump(struct memphy_struct *mp)
 
 int MEMPHY_put_freefp(struct memphy_struct *mp, addr_t fpn)
 {
-   struct framephy_struct *fp = mp->free_fp_list;
+   if (mp == NULL)
+      return -1;
    struct framephy_struct *newnode = malloc(sizeof(struct framephy_struct));
+   if (newnode == NULL)
+      return -1;
 
    /* Create new node with value fpn */
    newnode->fpn = fpn;
-   newnode->fp_next = fp;
+   pthread_mutex_lock(&memphy_lock);
+   newnode->fp_next = mp->free_fp_list;
    mp->free_fp_list = newnode;
+   pthread_mutex_unlock(&memphy_lock);
 
    return 0;
 }

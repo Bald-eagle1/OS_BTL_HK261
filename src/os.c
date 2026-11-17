@@ -28,8 +28,12 @@
 #include "dpi_rtl.h"
 #include "dma.h"
 
+void retire_proc(struct pcb_t *proc);
+void dma_async_wait_caller(struct pcb_t *caller);
+
 static int time_slot;
 static int num_cpus;
+_Atomic
 static int done = 0;
 static struct krnl_t os;
 
@@ -82,6 +86,8 @@ static void * cpu_routine(void * args) {
 			/* The porcess has finish it job */
 			printf("\tCPU %d: Processed %2d has finished\n",
 				id ,proc->pid);
+			dma_async_wait_caller(proc);
+			retire_proc(proc);
 			free(proc);
 			proc = get_proc();
 			time_left = 0;

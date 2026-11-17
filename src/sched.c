@@ -24,7 +24,20 @@ static struct queue_t mlq_ready_queue[MAX_PRIO];
 static int slot[MAX_PRIO];
 #endif
 
+void retire_proc(struct pcb_t *proc) {
+	pthread_mutex_lock(&queue_lock);
+	purgequeue(&running_list, proc);
+	pthread_mutex_unlock(&queue_lock);
+}
+
+static void release_queue_lock(pthread_mutex_t **lock) {
+	pthread_mutex_unlock(*lock);
+}
+
 int queue_empty(void) {
+	pthread_mutex_lock(&queue_lock);
+	pthread_mutex_t *held_queue_lock
+		__attribute__((cleanup(release_queue_lock))) = &queue_lock;
 #ifdef MLQ_SCHED
 	unsigned long prio;
 	for (prio = 0; prio < MAX_PRIO; prio++)
