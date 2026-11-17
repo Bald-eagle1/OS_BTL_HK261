@@ -19,7 +19,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>                           
 
+static pthread_mutex_t memphy_lock = PTHREAD_MUTEX_INITIALIZER;
 /*
  *  MEMPHY_mv_csr - move MEMPHY cursor
  *  @mp: memphy struct
@@ -153,33 +155,37 @@ int MEMPHY_format(struct memphy_struct *mp, int pagesz)
 
 int MEMPHY_get_freefp(struct memphy_struct *mp, addr_t *retfpn)
 {
-   if (mp == NULL || retfpn == NULL)
-      return -1;
+  if (mp == NULL || retfpn == NULL)
+    return -1;
 
-#ifdef MM64
-   if (mp->maxsz < PAGING64_PAGESZ)
-      return -1;
-#else
-   if (mp->maxsz < PAGING_PAGESZ)
-      return -1;
-#endif
+   #ifdef MM64
+  if (mp->maxsz < PAGING64_PAGESZ)
+    return -1;
+   #else
+  if (mp->maxsz < PAGING_PAGESZ)
+    return -1;
+   #endif
 
+   pthread_mutex_lock(&memphy_lock);
    struct framephy_struct *fp = mp->free_fp_list;
 
-   if (fp == NULL)
-      return -1;
+   if (fp == NULL) {
+    pthread_mutex_unlock(&memphy_lock);
+    return -1;
+  }
 
-   /* 
-    * TODO manage free frame list
-    */
+   /*
+   * TODO manage free frame list
+   */
    *retfpn = fp->fpn;
    mp->free_fp_list = fp->fp_next;
 
-   /* 
-    * TODO MEMPHY is iteratively used up until its exhausted
-    * No garbage collector acting then it not been released
-    */
+   /*
+   * TODO MEMPHY is iteratively used up until its exhausted
+   * No garbage collector acting then it not been released
+   */
    free(fp);
+   pthread_mutex_unlock(&memphy_lock);
 
    return 0;
 }
@@ -206,13 +212,15 @@ int MEMPHY_dump(struct memphy_struct *mp)
 
 int MEMPHY_put_freefp(struct memphy_struct *mp, addr_t fpn)
 {
-   struct framephy_struct *fp = mp->free_fp_list;
    struct framephy_struct *newnode = malloc(sizeof(struct framephy_struct));
 
    /* Create new node with value fpn */
    newnode->fpn = fpn;
-   newnode->fp_next = fp;
+
+   pthread_mutex_lock(&memphy_lock);
+   newnode->fp_next = mp->free_fp_list;
    mp->free_fp_list = newnode;
+   pthread_mutex_unlock(&memphy_lock);
 
    return 0;
 }
