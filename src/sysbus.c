@@ -17,6 +17,15 @@
 #include <pthread.h>
 #include "sysbus.h"
 
+static unsigned char ram_storage_lock;
+
+void lock_ram_storage(void) {
+    while (__atomic_test_and_set(&ram_storage_lock, __ATOMIC_ACQUIRE)) {}
+}
+void unlock_ram_storage(void) {
+    __atomic_clear(&ram_storage_lock, __ATOMIC_RELEASE);
+}
+
 // Maximum number of memory banks supported
 #define MAX_MEMORY_BANKS 8
 
@@ -166,6 +175,9 @@ extern "C" {
  * DPI Callback: Called from RTL when DMA read access
  */
 int dpi_bank_read32_legacy(long long offset) {
+    if (offset < 0 || memory_bank_get_size() < 4 ||
+        (uint64_t)offset > memory_bank_get_size() - 4)
+        return 0;
     uint8_t data[4] = {0};
 
     void* src = memory_bank_get_ptr((size_t)offset);
@@ -175,7 +187,9 @@ int dpi_bank_read32_legacy(long long offset) {
     //fflush(stdout);
     
     if (src != NULL) {
+        lock_ram_storage();
         memcpy(&data, src, 4);
+        unlock_ram_storage();
     }
 
     return  *((uint32_t*)data);
@@ -185,11 +199,16 @@ int dpi_bank_read32_legacy(long long offset) {
  * DPI Callback: Called from RTL when DMA write access
  */
 int dpi_bank_write32_legacy(long long offset, int value) {
+    if (offset < 0 || memory_bank_get_size() < 4 ||
+        (uint64_t)offset > memory_bank_get_size() - 4)
+        return -1;
     void* dst = memory_bank_get_ptr((size_t)offset);
     //printf("MEM WRITE RESULT: Address=%p, Write data=%x, Write rc=0, Readback=%x, Match=1\n",
     //        (void*)((size_t)offset), *(unsigned int*)&value, *(unsigned int*)&value);
     if (dst != NULL) {
+        lock_ram_storage();
         memcpy(dst,  &value, 4);
+        unlock_ram_storage();
     }
     //fflush(stdout);
        

@@ -235,11 +235,19 @@ int vmap_pgd_memset(struct pcb_t *caller,           // process call
                     addr_t addr,                       // start address which is aligned to pagesz
                     int pgnum)                      // num of mapping page
 {
-  //int pgit = 0;
-  //uint64_t pattern = 0xdeadbeef;
+  int pgit = 0;
+  uint64_t pattern = 0xdeadbeef;
 
   /* TODO memset the page table with given pattern
    */
+  if (caller == NULL)
+    return -1;
+
+  pattern = pattern & ~(PAGING_PTE_PRESENT_MASK | PAGING_PTE_SWAPPED_MASK);
+
+  for (pgit = 0; pgit < pgnum; pgit++) {
+    pte_set_entry(caller->mm, (addr >> 12) + pgit, pattern, caller);
+  }
 
   return 0;
 }
@@ -523,7 +531,18 @@ int init_mm(struct mm_struct *mm, struct pcb_t *caller)
 
   /* TODO init page table directory */
   mm->pgd = calloc(PAGING64_PTRS_PER_TABLE, sizeof(addr_t));
-  if (mm->pgd == NULL) return -1;
+  mm->p4d = calloc(PAGING64_PTRS_PER_TABLE, sizeof(addr_t));
+  mm->pud = calloc(PAGING64_PTRS_PER_TABLE, sizeof(addr_t));
+  mm->pmd = calloc(PAGING64_PTRS_PER_TABLE, sizeof(addr_t));
+  mm->pt  = calloc(PAGING64_PTRS_PER_TABLE, sizeof(addr_t));
+  if (mm->pgd == NULL || mm->p4d == NULL || mm->pud == NULL ||
+      mm->pmd == NULL || mm->pt == NULL)
+    return -1;
+
+  mm->pgd[0] = (addr_t)mm->p4d;
+  mm->p4d[0] = (addr_t)mm->pud;
+  mm->pud[0] = (addr_t)mm->pmd;
+  mm->pmd[0] = (addr_t)mm->pt;
 
   /* By default the owner comes with at least one vma */
   struct vm_area_struct *vma_malloc_used = malloc(sizeof(struct vm_area_struct));

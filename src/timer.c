@@ -15,6 +15,7 @@ static struct timer_id_container_t * dev_list = NULL;
 static uint64_t _time;
 
 static int timer_started = 0;
+_Atomic
 static int timer_stop = 0;
 
 

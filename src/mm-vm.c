@@ -167,4 +167,24 @@ int inc_vma_limit(struct pcb_t *caller, int vmaid, addr_t inc_sz)
   return 0;
 }
 
+/*
+ * insert_vma_sorted - insert new vma to mmap list sorted by vm_start
+ */
+int insert_vma_sorted(struct mm_struct *mm, struct vm_area_struct *new_vma) {
+  if (mm->mmap == NULL || new_vma->vm_start < mm->mmap->vm_start) {
+    new_vma->vm_next = mm->mmap;
+    mm->mmap = new_vma;
+    return 0;
+  }
+
+  struct vm_area_struct *cur = mm->mmap;
+  while (cur->vm_next != NULL && cur->vm_next->vm_start < new_vma->vm_start) {
+    cur = cur->vm_next;
+  }
+
+  new_vma->vm_next = cur->vm_next;
+  cur->vm_next = new_vma;
+  return 0;
+}
+
 // #endif
