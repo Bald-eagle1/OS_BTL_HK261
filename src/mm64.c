@@ -413,11 +413,19 @@ int init_mm(struct mm_struct *mm, struct pcb_t *caller)
   memset(mm, 0, sizeof(struct mm_struct));
 
   /* TODO init page table directory */
-  mm->pgd = calloc(PAGING_MAX_PGN, sizeof(addr_t));
-  mm->p4d = NULL;
-  mm->pud = NULL;
-  mm->pmd = NULL;
-  mm->pt = NULL;
+  mm->pgd = calloc(PAGING64_PTRS_PER_TABLE, sizeof(addr_t));
+  mm->p4d = calloc(PAGING64_PTRS_PER_TABLE, sizeof(addr_t));
+  mm->pud = calloc(PAGING64_PTRS_PER_TABLE, sizeof(addr_t));
+  mm->pmd = calloc(PAGING64_PTRS_PER_TABLE, sizeof(addr_t));
+  mm->pt  = calloc(PAGING64_PTRS_PER_TABLE, sizeof(addr_t));
+  if (mm->pgd == NULL || mm->p4d == NULL || mm->pud == NULL ||
+      mm->pmd == NULL || mm->pt == NULL)
+    return -1;
+
+  mm->pgd[0] = (addr_t)mm->p4d;
+  mm->p4d[0] = (addr_t)mm->pud;
+  mm->pud[0] = (addr_t)mm->pmd;
+  mm->pmd[0] = (addr_t)mm->pt;
 
   if (caller == NULL) {
     struct vm_area_struct *k_vma = malloc(sizeof(struct vm_area_struct));
@@ -568,21 +576,21 @@ int print_list_pgn(struct pgn_t *ip)
 
 int print_pgtbl(struct pcb_t *caller, addr_t start, addr_t end)
 {
-  if (caller == NULL || caller->mm == NULL)
-    return -1;
+  // addr_t pgn = start >> PAGING64_ADDR_PT_SHIFT;
+  // addr_t pgit = 0;
 
   struct mm_struct *mm = caller->mm;
-  addr_t pgd=0, p4d=0, pud=0, pmd=0, pt=0;
+  addr_t pgd=0;
+  addr_t p4d=0;
+  addr_t pud=0;
+  addr_t pmd=0;
+  addr_t pt=0;
 
   get_pd_from_address(start, &pgd, &p4d, &pud, &pmd, &pt);
 
-  /* Tra cứu bảng con thực tế của nhánh start (nếu có) */
-  addr_t *p4d_tbl = (mm->pgd && mm->pgd[pgd]) ? (addr_t*)(uintptr_t)mm->pgd[pgd] : NULL;
-  addr_t *pud_tbl = (p4d_tbl && p4d_tbl[p4d]) ? (addr_t*)(uintptr_t)p4d_tbl[p4d] : NULL;
-  addr_t *pmd_tbl = (pud_tbl && pud_tbl[pud]) ? (addr_t*)(uintptr_t)pud_tbl[pud] : NULL;
+  /* TODO traverse the page map and dump the page directory entries */
 
-  printf(" PDG=%16p P4g=%16p PUD=%16p PMD=%16p\n", 
-         (void*)mm->pgd, (void*)p4d_tbl, (void*)pud_tbl, (void*)pmd_tbl);
+  printf(" PDG=%16p P4g=%16p PUD=%16p PMD=%16p\n", (void*)mm->pgd, (void*)mm->p4d, (void*)mm->pud, (void*)mm->pmd);
 
   return 0;
 }
