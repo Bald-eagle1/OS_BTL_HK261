@@ -672,13 +672,14 @@ int __read(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE *data)
 int libread(
     struct pcb_t *proc, // Process executing the instruction
     uint32_t source,    // Index of source register
-    addr_t offset,    // Source address = [source] + [offset]
+    addr_t offset,      // Source address = [source] + [offset]
     uint32_t* destination)
 {
   BYTE data;
-printf("%s:%d\n",__func__,__LINE__);
-  int val = __read(proc, 0, source, offset, &data);
-
+  printf("%s:%d\n", __func__, __LINE__);
+  struct vm_rg_struct *currg = get_symrg_byid(proc->mm, source);
+  int vmaid = (currg != NULL && currg->vmaid >= 0) ? currg->vmaid : 0;
+  int val = __read(proc, vmaid, source, offset, &data);
   *destination = data;
 #ifdef IODUMP
   /* TODO dump IO content (if needed) */
@@ -686,7 +687,6 @@ printf("%s:%d\n",__func__,__LINE__);
   print_pgtbl(proc, 0, -1); // print max TBL
 #endif
 #endif
-
   return val;
 }
 
@@ -736,11 +736,13 @@ int __write(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE value
 /*libwrite - PAGING-based write a region memory */
 int libwrite(
     struct pcb_t *proc,   // Process executing the instruction
-    BYTE data,            // Data to be wrttien into memory
+    BYTE data,            // Data to be written into memory
     uint32_t destination, // Index of destination register
     addr_t offset)
 {
-  int val = __write(proc, 0, destination, offset, data);
+  struct vm_rg_struct *currg = get_symrg_byid(proc->mm, destination);
+  int vmaid = (currg != NULL && currg->vmaid >= 0) ? currg->vmaid : 0;
+  int val = __write(proc, vmaid, destination, offset, data);
   if (val == -1)
   {
     return -1;
@@ -751,7 +753,6 @@ int libwrite(
   print_pgtbl(proc, 0, -1); // print max TBL
 #endif
 #endif
-
   return val;
 }
 
@@ -842,46 +843,58 @@ int libmem_dma_memcpy(struct pcb_t *caller, uint32_t src, uint32_t dst, uint32_t
 
 int libkmem_copy_from_user(struct pcb_t *caller, uint32_t source, uint32_t destination, uint32_t offset, uint32_t size)
 {
-  /* TODO: provide OS level management kmem
-   */
+  if (caller == NULL || caller->krnl == NULL || caller->krnl->mm == NULL)
+    return -1;
+  uint32_t u_src = source;
+  uint32_t k_dest = destination;
 
-  struct vm_rg_struct *dest_rg = get_symrg_byid(caller->mm, destination);
+  struct vm_rg_struct *k_rg_src = get_symrg_byid(caller->krnl->mm, source);
+  struct vm_rg_struct *k_rg_dest = get_symrg_byid(caller->krnl->mm, destination);
+  if (k_rg_src != NULL && k_rg_src->rg_start != 0 && (k_rg_dest == NULL || k_rg_dest->rg_start == 0)) {
+    u_src = destination;
+    k_dest = source;
+  }
+
+  struct vm_rg_struct *dest_rg = get_symrg_byid(caller->krnl->mm, k_dest);
   if (dest_rg == NULL || (dest_rg->rg_start == 0 && dest_rg->rg_end == 0)) {
     addr_t addr = 0;
-    __kmalloc(caller, 0, destination, offset + size, &addr);
+    __kmalloc(caller, 0, k_dest, offset + size, &addr);
   }
 
-  /*
-   * TODO: Map kernel address range
-   */
   for (uint32_t i = 0; i < size; i++) {
     BYTE data = 0;
-
-    __read_user_mem(caller, 0, source, offset + i, &data);
-    __write_kernel_mem(caller, 0, destination, offset + i, data);
+    __read_user_mem(caller, 0, u_src, offset + i, &data);
+    __write_kernel_mem(caller, 0, k_dest, offset + i, data);
   }
-
   return 0;
 }
 
 int libkmem_copy_to_user(struct pcb_t *caller, uint32_t source, uint32_t destination, uint32_t offset, uint32_t size)
 {
-  /* TODO: provide OS level management kmem
-   */
+  if (caller == NULL || caller->krnl == NULL || caller->krnl->mm == NULL)
+    return -1;
+  uint32_t k_src = source;
+  uint32_t u_dest = destination;
 
-  struct vm_rg_struct *dest_rg = get_symrg_byid(caller->mm, destination);
-  if (dest_rg == NULL || (dest_rg->rg_start == 0 && dest_rg->rg_end == 0)) {
-    addr_t addr = 0;
-    __alloc(caller, 0, destination, offset + size, &addr);
+  struct vm_rg_struct *k_rg_src = get_symrg_byid(caller->krnl->mm, source);
+  struct vm_rg_struct *k_rg_dest = get_symrg_byid(caller->krnl->mm, destination);
+
+  if (k_rg_dest != NULL && k_rg_dest->rg_start != 0 && (k_rg_src == NULL || k_rg_src->rg_start == 0)) {
+    k_src = destination;
+    u_dest = source;
   }
 
-  /*
-   * TODO: Map kernel address range
-   */
+  struct vm_rg_struct *dest_rg = get_symrg_byid(caller->mm, u_dest);
+  if (dest_rg == NULL || (dest_rg->rg_start == 0 && dest_rg->rg_end == 0)) {
+    addr_t addr = 0;
+    __alloc(caller, 0, u_dest, offset + size, &addr);
+  }
+
   for (uint32_t i = 0; i < size; i++) {
     BYTE data = 0;
-      __read_kernel_mem(caller, 0, source, offset + i, &data);
-      __write_user_mem(caller, 0, destination, offset + i, data);
+    if (__read_kernel_mem(caller, 0, k_src, offset + i, &data) != 0)
+      break;
+    __write_user_mem(caller, 0, u_dest, offset + i, data);
   }
   return 0;
 }
@@ -896,16 +909,20 @@ int libkmem_copy_to_user(struct pcb_t *caller, uint32_t source, uint32_t destina
  */
 int __read_kernel_mem(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE *data)
 {
-  /* TODO: provide OS memory operator for kernel memory region */
-  //krnl->krnl_pgd ... or krnl->pgd ... based on kmem implementation strategy
-
   if (caller == NULL || caller->krnl == NULL || caller->krnl->mm == NULL || data == NULL)
     return -1;
+  if (rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ)
+    return -1;
+
   struct vm_rg_struct *currg = get_symrg_byid(caller->krnl->mm, rgid);
   struct vm_area_struct *vma = get_vma_by_num(caller->krnl->mm, vmaid);
+
   if (currg == NULL || vma == NULL)
     return -1;
-    
+
+  if (currg->rg_start == 0 && currg->rg_end == 0)
+    return -1;
+
   addr_t k_offset = (currg->rg_start - vma->vm_start) + offset;
   return MEMPHY_read(caller->krnl->mram, k_offset, data);
 }
@@ -919,14 +936,18 @@ int __read_kernel_mem(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, 
  */
 int __write_kernel_mem(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE value)
 {
-  /* TODO: provide OS memory operator for kernel memory region */
-  //krnl->krnl_pgd ... or krnl->pgd ... based on kmem implementation strategy
-
   if (caller == NULL || caller->krnl == NULL || caller->krnl->mm == NULL)
     return -1;
+  if (rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ)
+    return -1;
+
   struct vm_rg_struct *currg = get_symrg_byid(caller->krnl->mm, rgid);
   struct vm_area_struct *vma = get_vma_by_num(caller->krnl->mm, vmaid);
+  
   if (currg == NULL || vma == NULL)
+    return -1;
+
+  if (currg->rg_start == 0 && currg->rg_end == 0)
     return -1;
 
   addr_t k_offset = (currg->rg_start - vma->vm_start) + offset;
