@@ -1078,31 +1078,31 @@ int __write_user_mem(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, B
  *@vmaid: ID vm area to alloc memory region
  *@incpgnum: number of page
  */
-int free_pcb_memph(struct pcb_t *caller)
-{
-  pthread_mutex_lock(&mmvm_lock);
-  int pagenum, fpn;
-  uint32_t pte;
+// int free_pcb_memph(struct pcb_t *caller)
+// {
+//   pthread_mutex_lock(&mmvm_lock);
+//   int pagenum, fpn;
+//   uint32_t pte;
 
-  for (pagenum = 0; pagenum < PAGING_MAX_PGN; pagenum++)
-  {
-    pte = caller->mm->pgd[pagenum];
+//   for (pagenum = 0; pagenum < PAGING_MAX_PGN; pagenum++)
+//   {
+//     pte = caller->mm->pgd[pagenum];
 
-    if (PAGING_PAGE_PRESENT(pte))
-    {
-      fpn = PAGING_FPN(pte);
-      MEMPHY_put_freefp(caller->krnl->mram, fpn);
-    }
-    else
-    {
-      fpn = PAGING_SWP(pte);
-      MEMPHY_put_freefp(caller->krnl->active_mswp, fpn);
-    }
-  }
+//     if (PAGING_PAGE_PRESENT(pte))
+//     {
+//       fpn = PAGING_FPN(pte);
+//       MEMPHY_put_freefp(caller->krnl->mram, fpn);
+//     }
+//     else
+//     {
+//       fpn = PAGING_SWP(pte);
+//       MEMPHY_put_freefp(caller->krnl->active_mswp, fpn);
+//     }
+//   }
 
-  pthread_mutex_unlock(&mmvm_lock);
-  return 0;
-}
+//   pthread_mutex_unlock(&mmvm_lock);
+//   return 0;
+// }
 
 
 #ifdef MM64
