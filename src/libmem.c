@@ -26,6 +26,20 @@ static pthread_mutex_t mmvm_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t kmm_lock = PTHREAD_MUTEX_INITIALIZER;
 static int cur_heap_vmaid[32] = {0}; //pid
 
+/*is_canonical_address - check the 8 msb (= 0 -> user, = 1 -> kernel) -> valid otherwise invalid
+ *@addr: address to check
+ *
+ */
+static int is_canonical_address(addr_t addr)
+{
+    uint64_t msb7 = (addr >> 57) & 0x7FULL;
+    uint64_t bit56 = (addr >> 56) & 1ULL;
+
+    if ((bit56 == 0 && msb7 == 0) || (bit56 == 1 && msb7 == 0x7FULL))
+        return 1;
+    return 0;
+}
+
 /*enlist_vm_freerg_list - add new rg to freerg_list
  *@mm: memory region
  *@rg_elmt: new region
@@ -632,11 +646,20 @@ int __read(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE *data)
     return -1;
   }
   
-  if (currg->rg_start + offset >= 0xbfffe000) {
-    printf("[SECURITY FAULT] Process %d denied reading Kernel space at %lx!\n", 
-           caller->pid, currg->rg_start + offset);
+  addr_t access_addr = currg->rg_start + offset;
+
+  if (!is_canonical_address(access_addr)) {
+    printf("[INVALID ADDR] Process %d tried to access non-canonical address at %llx!\n", 
+           caller->pid, (unsigned long long)access_addr);
     pthread_mutex_unlock(&mmvm_lock);
     return -1;
+  }
+
+  if (((access_addr >> 56) & 1ULL) == 1 || access_addr >= 0xbfffe000ULL) {
+      printf("[SECURITY FAULT] Process %d denied accessing kernel space at %llx!\n", 
+            caller->pid, (unsigned long long)access_addr);
+      pthread_mutex_unlock(&mmvm_lock);
+      return -1;
   }
 
   pg_getval(caller->mm, currg->rg_start + offset, data, caller);
@@ -688,11 +711,20 @@ int __write(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE value
     return -1;
   }
 
-  if (currg->rg_start + offset >= 0xbfffe000) {
-    printf("[SECURITY FAULT] Process %d denied writing to Kernel space at %lx!\n", 
-           caller->pid, currg->rg_start + offset);
+  addr_t access_addr = currg->rg_start + offset;
+
+  if (!is_canonical_address(access_addr)) {
+    printf("[INVALID ADDR] Process %d tried to access non-canonical address at %llx!\n", 
+           caller->pid, (unsigned long long)access_addr);
     pthread_mutex_unlock(&mmvm_lock);
     return -1;
+  }
+
+  if (((access_addr >> 56) & 1ULL) == 1 || access_addr >= 0xbfffe000ULL) {
+      printf("[SECURITY FAULT] Process %d denied accessing kernel space at %llx!\n", 
+            caller->pid, (unsigned long long)access_addr);
+      pthread_mutex_unlock(&mmvm_lock);
+      return -1;
   }
 
   pg_setval(caller->mm, currg->rg_start + offset, value, caller);
