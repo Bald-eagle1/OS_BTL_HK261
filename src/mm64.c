@@ -300,34 +300,165 @@ addr_t vmap_page_range(struct pcb_t *caller,           // process call
 
 addr_t alloc_pages_range(struct pcb_t *caller, int req_pgnum, struct framephy_struct **frm_lst)
 {
-  //addr_t fpn;
-  //int pgit;
-  //struct framephy_struct *newfp_str = NULL;
-  //struct framephy_struct **cur = frm_lst;
+  addr_t fpn;
+  int pgit;
+  struct framephy_struct *newfp_str = NULL;
+  struct framephy_struct **cur = frm_lst;
+  addr_t ret_alloc = 0;
 
-  /* TODO: allocate the page 
+  /* TODO: allocate the page
   //caller-> ...
   //frm_lst-> ...
   */
+  if (frm_lst == NULL)
+    return (addr_t)-1;
+  *frm_lst = NULL;
+  if (caller == NULL || caller->krnl == NULL ||
+      caller->krnl->mram == NULL || req_pgnum <= 0)
+    return (addr_t)-1;
 
-
-/*
   for (pgit = 0; pgit < req_pgnum; pgit++)
   {
-    // TODO: allocate the page 
-    if (MEMPHY_get_freefp(caller->mram, &fpn) == 0)
+    newfp_str = malloc(sizeof(struct framephy_struct));
+    if (newfp_str == NULL)
     {
-      newfp_str->fpn = fpn;
+      ret_alloc = (addr_t)-1;
+      break;
     }
-    else
-    { // TODO: ERROR CODE of obtaining somes but not enough frames
+
+    if (MEMPHY_get_freefp(caller->krnl->mram, &fpn) == -1)
+    {
+      /* TODO: ERROR CODE of obtaining somes but not enough frames */
+      free(newfp_str);
+      ret_alloc = (addr_t)-3000;
+      break;
     }
+
+    newfp_str->fpn = fpn;
+    newfp_str->owner = caller->mm;
+    newfp_str->fp_next = NULL;
+    *cur = newfp_str;
+    cur = &newfp_str->fp_next;
   }
-*/
 
+  if (ret_alloc != 0 && *frm_lst != NULL)
+  {
+    *cur = caller->krnl->mram->free_fp_list;
+    caller->krnl->mram->free_fp_list = *frm_lst;
+    *frm_lst = NULL;
+  }
 
-  /* End TODO */
+  return ret_alloc;
+}
 
+addr_t vm_map_kernel(struct pcb_t *caller, addr_t astart, addr_t aend,
+                     addr_t mapstart, int incpgnum, struct vm_rg_struct *ret_rg)
+{
+  /* TODO: allocate kernel frames and update krnl_pgd. */
+  if (caller == NULL || caller->krnl == NULL || ret_rg == NULL || incpgnum <= 0)
+    return (addr_t)-1;
+
+  struct krnl_t *krnl = caller->krnl;
+  if (krnl->mm == NULL || krnl->mram == NULL || krnl->krnl_pgd == NULL ||
+      krnl->mm->p4d == NULL || krnl->mm->pud == NULL ||
+      krnl->mm->pmd == NULL || krnl->mm->pt == NULL ||
+      krnl->mram->storage == NULL || krnl->mram->maxsz <= 0)
+    return (addr_t)-1;
+
+  if (astart >= aend || mapstart < astart || mapstart > aend ||
+      mapstart % PAGING64_PAGESZ != 0 ||
+      (addr_t)incpgnum > (aend - mapstart) / PAGING64_PAGESZ ||
+      mapstart / PAGING64_PAGESZ >= PAGING64_MAX_PGN)
+    return (addr_t)-1;
+
+  int pgn = mapstart / PAGING64_PAGESZ;
+  if ((addr_t)incpgnum > PAGING64_MAX_PGN - pgn)
+    return (addr_t)-1;
+
+  addr_t *pt = krnl->krnl_pt;
+  if (pt == NULL)
+    pt = krnl->mm->pt;
+  for (int i = 0; i < incpgnum; i++)
+    if (pt[pgn + i] != 0)
+      return (addr_t)-1;
+
+  struct framephy_struct *fp = krnl->mram->free_fp_list;
+  struct framephy_struct *scan;
+  int firstfpn = 0;
+  int numfp = krnl->mram->maxsz / PAGING64_PAGESZ;
+  int i;
+  while (fp != NULL)
+  {
+    if (fp->fpn < (addr_t)numfp && fp->fpn <= PAGING_PTE_FPN_MASK)
+    {
+      firstfpn = fp->fpn;
+      if (incpgnum <= numfp - firstfpn &&
+          (addr_t)(incpgnum - 1) <= PAGING_PTE_FPN_MASK - firstfpn)
+      {
+        for (i = 0; i < incpgnum; i++)
+        {
+          scan = krnl->mram->free_fp_list;
+          while (scan != NULL && scan->fpn != (addr_t)(firstfpn + i))
+            scan = scan->fp_next;
+          if (scan == NULL)
+            break;
+        }
+        if (i == incpgnum)
+          break;
+      }
+    }
+    fp = fp->fp_next;
+  }
+  if (fp == NULL)
+    return (addr_t)-1;
+
+  for (i = incpgnum - 1; i >= 0; i--)
+  {
+    struct framephy_struct *prev = NULL;
+    fp = krnl->mram->free_fp_list;
+    while (fp->fpn != (addr_t)(firstfpn + i))
+    {
+      prev = fp;
+      fp = fp->fp_next;
+    }
+    if (prev == NULL)
+      krnl->mram->free_fp_list = fp->fp_next;
+    else
+      prev->fp_next = fp->fp_next;
+    fp->fp_next = krnl->mram->free_fp_list;
+    krnl->mram->free_fp_list = fp;
+  }
+
+  struct framephy_struct *frm_lst = NULL;
+  if (alloc_pages_range(caller, incpgnum, &frm_lst) != 0)
+    return (addr_t)-1;
+
+  if (krnl->krnl_pt == NULL)
+  {
+    memset(krnl->krnl_pgd, 0, PAGING64_MAX_PGN * sizeof(addr_t));
+    krnl->krnl_p4d = krnl->mm->p4d;
+    krnl->krnl_pud = krnl->mm->pud;
+    krnl->krnl_pmd = krnl->mm->pmd;
+    krnl->krnl_pt = krnl->mm->pt;
+    krnl->krnl_pgd[0] = (addr_t)krnl->krnl_p4d;
+    krnl->krnl_p4d[0] = (addr_t)krnl->krnl_pud;
+    krnl->krnl_pud[0] = (addr_t)krnl->krnl_pmd;
+    krnl->krnl_pmd[0] = (addr_t)krnl->krnl_pt;
+  }
+  for (i = 0; i < incpgnum; i++)
+  {
+    fp = frm_lst;
+    int fpn = fp->fpn;
+    krnl->krnl_pt[pgn + i] = PAGING_PTE_PRESENT_MASK | fpn;
+    memset(krnl->mram->storage + fpn * PAGING64_PAGESZ, 0, PAGING64_PAGESZ);
+    frm_lst = fp->fp_next;
+    free(fp);
+  }
+
+  ret_rg->rg_start = mapstart;
+  ret_rg->rg_end = mapstart + (addr_t)incpgnum * PAGING64_PAGESZ;
+  ret_rg->vmaid = 0;
+  ret_rg->rg_next = NULL;
   return 0;
 }
 
@@ -354,14 +485,8 @@ addr_t vm_map_ram(struct pcb_t *caller, addr_t astart, addr_t aend, addr_t mapst
    */
   ret_alloc = alloc_pages_range(caller, incpgnum, &frm_lst);
 
-  if (ret_alloc < 0 && ret_alloc != -3000)
-    return -1;
-
-  /* Out of memory */
-  if (ret_alloc == -3000)
-  {
-    return -1;
-  }
+  if (ret_alloc != 0)
+    return (addr_t)-1;
 
   /* it leaves the case of memory is enough but half in ram, half in swap
    * do the swaping all to swapper to get the all in ram */
