@@ -281,16 +281,30 @@ int pg_getpage(struct mm_struct *mm, int pgn, int *fpn, struct pcb_t *caller)
 int pg_getval(struct mm_struct *mm, int addr, BYTE *data, struct pcb_t *caller)
 {
   int pgn = PAGING_PGN(addr);
+//int off = ...
+#ifdef MM64
+  pgn = addr >> 12;
+  int off = addr & (PAGING64_PAGESZ - 1);
+#else
   int off = PAGING_OFFST(addr);
+#endif
   int fpn;
 
   if (pg_getpage(mm, pgn, &fpn, caller) != 0)
     return -1; /* invalid page access */
 
-  /* Physical address = start of the frame + offset within the page. */
+//int phyaddr = ...
+#ifdef MM64
+  int phyaddr = fpn * PAGING64_PAGESZ + off;
+#else
   int phyaddr = fpn * PAGING_PAGESZ + off;
+#endif
 
-  /* Ask the operating system to read one byte at the physical address. */
+  /* TODO
+   *  MEMPHY_read(caller->krnl->mram, phyaddr, data);
+   *  MEMPHY READ
+   *  SYSCALL 17 sys_memmap with SYSMEM_IO_READ
+   */
   struct sc_regs regs = {0};
   regs.a1 = SYSMEM_IO_READ;
   regs.a2 = phyaddr;
@@ -298,12 +312,10 @@ int pg_getval(struct mm_struct *mm, int addr, BYTE *data, struct pcb_t *caller)
   if (_syscall(caller->krnl, caller->pid, 17, &regs) != 0)
     return -1;
 
-  /* The syscall returns the byte through a3. */
   *data = (BYTE)regs.a3;
 
   return 0;
 }
-
 /*pg_setval - write value to given offset
  *@mm: memory region
  *@addr: virtual address to acess
@@ -313,18 +325,30 @@ int pg_getval(struct mm_struct *mm, int addr, BYTE *data, struct pcb_t *caller)
 int pg_setval(struct mm_struct *mm, int addr, BYTE value, struct pcb_t *caller)
 {
   int pgn = PAGING_PGN(addr);
+  //int off = ...
+  #ifdef MM64
+  pgn = addr >> 12;
+  int off = addr & (PAGING64_PAGESZ - 1);
+  #else
   int off = PAGING_OFFST(addr);
+  #endif
   int fpn;
 
   /* Get the page to MEMRAM, swap from MEMSWAP if needed */
   if (pg_getpage(mm, pgn, &fpn, caller) != 0)
     return -1; /* invalid page access */
 
-
-  /* Physical address = start of the frame + offset within the page. */
+  #ifdef MM64
+  int phyaddr = fpn * PAGING64_PAGESZ + off;
+  #else
   int phyaddr = fpn * PAGING_PAGESZ + off;
+  #endif
 
-  /* Ask the operating system to write one byte at the physical address. */
+  /* TODO
+   *  MEMPHY_write(caller->krnl->mram, phyaddr, value);
+   *  MEMPHY WRITE with SYSMEM_IO_WRITE
+   * SYSCALL 17 sys_memmap
+   */
   struct sc_regs regs = {0};
   regs.a1 = SYSMEM_IO_WRITE;
   regs.a2 = phyaddr;
