@@ -87,9 +87,9 @@
 ### Kernel Space & Dual-Mode Isolation (`src/libmem.c`)
 - [x] Implement `libkmem_copy_from_user()` (safe data transfer from userspace region to kernelspace region).
 - [x] Implement `libkmem_copy_to_user()` (safe data transfer from kernelspace region to userspace region).
-- [ ] Implement `__kmalloc()` and `libkmem_malloc()` for kernel contiguous memory allocation.
-- [ ] Implement privileged memory access boundaries (block user `read`/`write` to kernel space).
-- [ ] Implement `__read_kernel_mem()` and `__write_kernel_mem()` mapping logic.
+- [x] Implement `__kmalloc()` and `libkmem_malloc()` for kernel contiguous memory allocation.
+- [x] Implement privileged memory access boundaries (block user `read`/`write` to kernel space).
+- [x] Implement `__read_kernel_mem()` and `__write_kernel_mem()` mapping logic.
 
 ---
 

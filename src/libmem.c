@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <limits.h>
 
 static pthread_mutex_t mmvm_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t kmm_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -388,9 +389,14 @@ int libread(
     addr_t offset,    // Source address = [source] + [offset]
     uint32_t* destination)
 {
+  if (destination == NULL)
+    return -1;
+
   BYTE data;
 printf("%s:%d\n",__func__,__LINE__);
   int val = __read(proc, 0, source, offset, &data);
+  if (val != 0)
+    return val;
 
   *destination = data;
 #ifdef IODUMP
@@ -453,45 +459,97 @@ int libwrite(
 }
 
 
-/*libkmem_malloc- alloc region memory in kmem
- *@caller: caller
- *@rgid: memory region ID (used to identify variable in symbole table)
- *@size: memory size
- */
-
 int libkmem_malloc(struct pcb_t * caller, uint32_t size, uint32_t reg_index)
 {
-  /* 
+  /*
    * TODO: provide OS level management
    *       and forward the request to helper
    */
-//addr_t  addr;
-//int val = ...
+  addr_t addr;
+  addr_t val;
 
-  /* 
+  /*
    * TODO: provide OS kmem allocation validation
    */
+
+  if (caller == NULL || size == 0 || reg_index >= PAGING_MAX_SYMTBL_SZ)
+    return -1;
+
+  val = __kmalloc(caller, 0, reg_index, size, &addr);
+  if (val == (addr_t)-1)
+    return -1;
 
   return 0;
 }
 
 
-/*kmalloc - alloc region memory in kmem
- *@caller: caller
- *@vmaid: ID vm area to alloc memory region
- *@rgid: memory region ID (used to identify variable in symbole table)
- *@size: memory size
- *@alloc_addr: allocated address
- */
 addr_t __kmalloc(struct pcb_t *caller, int vmaid, int rgid, addr_t size, addr_t *alloc_addr)
 {
   /* TODO: provide OS kernel memory allocation
    *       update krnl_pgd for OS kernel level management */
 
-  //struct krnl_t *krnl = caller->krnl;
-  //krnl->symrgtbl...
-  //krnl->krnl_pgd ...
+  struct krnl_t *krnl = caller->krnl;  
 
+#ifdef MM64
+  addr_t pagesz = PAGING64_PAGESZ;
+  addr_t maxpgn = PAGING64_MAX_PGN;
+  if (krnl->mm->p4d == NULL || krnl->mm->pud == NULL ||
+      krnl->mm->pmd == NULL || krnl->mm->pt == NULL)
+    return (addr_t)-1;
+#else
+  addr_t pagesz = PAGING_PAGESZ;
+  addr_t maxpgn = PAGING_MAX_PGN;
+#endif
+
+  pthread_mutex_lock(&kmm_lock);
+  struct vm_area_struct *cur_vma = get_vma_by_num(krnl->mm, vmaid);
+  struct vm_rg_struct *rgnode = &krnl->mm->symrgtbl[rgid];
+
+  if (cur_vma == NULL || rgnode->rg_start != rgnode->rg_end)
+  {
+    pthread_mutex_unlock(&kmm_lock);
+    return (addr_t)-1;
+  }
+
+  addr_t alignedsize = ((size + pagesz - 1) / pagesz) * pagesz;
+  int incpgnum = alignedsize / pagesz;
+  if (cur_vma->sbrk >= maxpgn * pagesz)
+  {
+    pthread_mutex_unlock(&kmm_lock);
+    return (addr_t)-1;
+  }
+  addr_t mapstart = ((cur_vma->sbrk + pagesz - 1) / pagesz) * pagesz;
+  addr_t pgn = mapstart / pagesz;
+  if ((addr_t)incpgnum > maxpgn - pgn)
+  {
+    pthread_mutex_unlock(&kmm_lock);
+    return (addr_t)-1;
+  }
+
+struct vm_rg_struct mapped_rg;
+
+addr_t val = vm_map_kernel(caller,
+                          mapstart,
+                          mapstart + alignedsize,
+                          mapstart,
+                          incpgnum,
+                          &mapped_rg);
+
+if (val != 0)
+{
+  pthread_mutex_unlock(&kmm_lock);
+  return (addr_t)-1;
+}
+
+  rgnode->vmaid = vmaid;
+  rgnode->rg_start = mapstart;
+  rgnode->rg_end = mapstart + size;
+  rgnode->rg_next = NULL;
+  cur_vma->sbrk = mapstart + alignedsize;
+  cur_vma->vm_end = cur_vma->sbrk;
+  *alloc_addr = mapstart;
+
+  pthread_mutex_unlock(&kmm_lock);
   return 0;
 
 }
@@ -614,65 +672,216 @@ int libkmem_copy_to_user(struct pcb_t *caller, uint32_t source, uint32_t destina
 }
 
 
-/*__read_kernel_mem - read value in kernel region memory
- *@caller: caller
- *@vmaid: ID vm area to alloc memory region
- *@rgid: memory region ID (used to identify variable in symbole table)
- *@offset: offset to acess in memory region
- *@value: data value
- */
 int __read_kernel_mem(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE *data)
 {
   /* TODO: provide OS memory operator for kernel memory region */
-  //krnl->krnl_pgd ... or krnl->pgd ... based on kmem implementation strategy
 
-  return 0;
+  if (caller == NULL || caller->krnl == NULL || data == NULL ||
+      rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ)
+    return -1;
+
+  struct krnl_t *krnl = caller->krnl;
+  if (krnl->mm == NULL || krnl->mram == NULL || krnl->krnl_pgd == NULL ||
+      krnl->mram->storage == NULL || krnl->mram->maxsz <= 0)
+    return -1;
+
+  pthread_mutex_lock(&kmm_lock);
+
+  struct vm_rg_struct *currg = get_symrg_byid(krnl->mm, rgid);
+  struct vm_area_struct *cur_vma = get_vma_by_num(krnl->mm, vmaid);
+  if (currg == NULL || cur_vma == NULL || currg->vmaid != vmaid ||
+      currg->rg_start >= currg->rg_end ||
+      currg->rg_start < cur_vma->vm_start || currg->rg_end > cur_vma->sbrk ||
+      offset >= currg->rg_end - currg->rg_start)
+  {
+    pthread_mutex_unlock(&kmm_lock);
+    return -1;
+  }
+
+  addr_t addr = currg->rg_start + offset;
+#ifdef MM64
+  addr_t pagesz = PAGING64_PAGESZ;
+#else
+  addr_t pagesz = PAGING_PAGESZ;
+#endif
+  addr_t pte;
+
+#ifdef MM64
+  if (krnl->krnl_pt == NULL || addr / pagesz >= PAGING64_MAX_PGN)
+#else
+  if (addr / pagesz >= PAGING_MAX_PGN)
+#endif
+  {
+    pthread_mutex_unlock(&kmm_lock);
+    return -1;
+  }
+  int pgn = addr / pagesz;
+  int off = addr % pagesz;
+#ifdef MM64
+  pte = krnl->krnl_pt[pgn];
+#else
+  pte = krnl->krnl_pgd[pgn];
+#endif
+  if (!PAGING_PAGE_PRESENT(pte) || (pte & PAGING_PTE_SWAPPED_MASK))
+  {
+    pthread_mutex_unlock(&kmm_lock);
+    return -1;
+  }
+
+  int fpn = PAGING_FPN(pte);
+  int phyaddr = fpn * pagesz + off;
+  if (phyaddr >= krnl->mram->maxsz)
+  {
+    pthread_mutex_unlock(&kmm_lock);
+    return -1;
+  }
+
+  int val = MEMPHY_read(krnl->mram, phyaddr, data);
+  pthread_mutex_unlock(&kmm_lock);
+  return val;
 }
 
-/*__write_kernel_mem - write a kernel region memory
- *@caller: caller
- *@vmaid: ID vm area to alloc memory region
- *@rgid: memory region ID (used to identify variable in symbole table)
- *@offset: offset to acess in memory region
- *@value: data value
- */
 int __write_kernel_mem(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE value)
 {
   /* TODO: provide OS memory operator for kernel memory region */
-  //krnl->krnl_pgd ... or krnl->pgd ... based on kmem implementation strategy
 
-  return 0;
+  if (caller == NULL || caller->krnl == NULL ||
+      rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ)
+    return -1;
+
+  struct krnl_t *krnl = caller->krnl;
+  if (krnl->mm == NULL || krnl->mram == NULL || krnl->krnl_pgd == NULL ||
+      krnl->mram->storage == NULL || krnl->mram->maxsz <= 0)
+    return -1;
+
+  pthread_mutex_lock(&kmm_lock);
+
+  struct vm_rg_struct *currg = get_symrg_byid(krnl->mm, rgid);
+  struct vm_area_struct *cur_vma = get_vma_by_num(krnl->mm, vmaid);
+  if (currg == NULL || cur_vma == NULL || currg->vmaid != vmaid ||
+      currg->rg_start >= currg->rg_end ||
+      currg->rg_start < cur_vma->vm_start || currg->rg_end > cur_vma->sbrk ||
+      offset >= currg->rg_end - currg->rg_start)
+  {
+    pthread_mutex_unlock(&kmm_lock);
+    return -1;
+  }
+
+  addr_t addr = currg->rg_start + offset;
+#ifdef MM64
+  addr_t pagesz = PAGING64_PAGESZ;
+#else
+  addr_t pagesz = PAGING_PAGESZ;
+#endif
+  addr_t pte;
+
+#ifdef MM64
+  if (krnl->krnl_pt == NULL || addr / pagesz >= PAGING64_MAX_PGN)
+#else
+  if (addr / pagesz >= PAGING_MAX_PGN)
+#endif
+  {
+    pthread_mutex_unlock(&kmm_lock);
+    return -1;
+  }
+  int pgn = addr / pagesz;
+  int off = addr % pagesz;
+#ifdef MM64
+  pte = krnl->krnl_pt[pgn];
+#else
+  pte = krnl->krnl_pgd[pgn];
+#endif
+  if (!PAGING_PAGE_PRESENT(pte) || (pte & PAGING_PTE_SWAPPED_MASK))
+  {
+    pthread_mutex_unlock(&kmm_lock);
+    return -1;
+  }
+
+  int fpn = PAGING_FPN(pte);
+  int phyaddr = fpn * pagesz + off;
+  if (phyaddr >= krnl->mram->maxsz)
+  {
+    pthread_mutex_unlock(&kmm_lock);
+    return -1;
+  }
+
+  int val = MEMPHY_write(krnl->mram, phyaddr, value);
+  pthread_mutex_unlock(&kmm_lock);
+  return val;
 }
 
-/*__read_user_mem - read value in user region memory
- *@caller: caller
- *@vmaid: ID vm area to alloc memory region
- *@rgid: memory region ID (used to identify variable in symbole table)
- *@offset: offset to acess in memory region
- *@value: data value
- */
 int __read_user_mem(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE *data)
 {
   /* TODO: provide OS level management user memory access */
-  //krnl->pgd ... or krnl->krnl_pgd  ... based on kmem implementation strategy
 
-   return 0;
+  if (caller == NULL || caller->mm == NULL || caller->krnl == NULL ||
+      data == NULL || rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ)
+    return -1;
+
+  if (caller->mm == caller->krnl->mm)
+    return -1;
+
+  pthread_mutex_lock(&mmvm_lock);
+  struct vm_rg_struct *currg = get_symrg_byid(caller->mm, rgid);
+  struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
+
+  if (currg == NULL || cur_vma == NULL ||
+      currg->rg_start >= currg->rg_end ||
+      currg->rg_start < cur_vma->vm_start || currg->rg_end > cur_vma->sbrk ||
+      offset >= currg->rg_end - currg->rg_start)
+  {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
+
+  addr_t addr = currg->rg_start + offset;
+  if (addr > INT_MAX)
+  {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
+
+  int val = pg_getval(caller->mm, (int)addr, data, caller);
+  pthread_mutex_unlock(&mmvm_lock);
+  return val;
 }
 
 
-/*__write_user_mem - write a user region memory
- *@caller: caller
- *@vmaid: ID vm area to alloc memory region
- *@rgid: memory region ID (used to identify variable in symbole table)
- *@offset: offset to acess in memory region
- *@value: data value
- */
 int __write_user_mem(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE value)
 {
   /* TODO: provide OS level management user memory access */
-  //krnl->pgd ... or krnl->krnl_pgd  ... based on kmem implementation strategy
 
-  return 0;
+  if (caller == NULL || caller->mm == NULL || caller->krnl == NULL ||
+      rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ)
+    return -1;
+
+  if (caller->mm == caller->krnl->mm)
+    return -1;
+
+  pthread_mutex_lock(&mmvm_lock);
+  struct vm_rg_struct *currg = get_symrg_byid(caller->mm, rgid);
+
+  struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
+
+  if (currg == NULL || cur_vma == NULL ||
+      currg->rg_start >= currg->rg_end ||
+      currg->rg_start < cur_vma->vm_start || currg->rg_end > cur_vma->sbrk ||
+      offset >= currg->rg_end - currg->rg_start)
+  {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
+
+  addr_t addr = currg->rg_start + offset;
+  if (addr > INT_MAX)
+  {
+    pthread_mutex_unlock(&mmvm_lock);
+    return -1;
+  }
+
+  int val = pg_setval(caller->mm, (int)addr, value, caller);
+  pthread_mutex_unlock(&mmvm_lock);
+  return val;
 }
 
 
