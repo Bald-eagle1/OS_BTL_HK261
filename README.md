@@ -1,39 +1,5 @@
 # demacOprx — Operating System Simulation with DMA Subsystem
 > **Course:** CO2018 Operating Systems — Ho Chi Minh City University of Technology (HCMUT)
-
-A multi-tasking operating system simulator that integrates 64-bit virtual memory management, multi-level queue scheduling, and a cycle-accurate hardware DMA co-processor powered by Verilator RTL and DPI-C.
-
----
-
-## 🚀 Key Modules & What We Built
-
-### 1. Asynchronous Co-processor & DMA Subsystem (`Module 2.3`)
-* **Physical System Bus Interface (`src/sysbus.c`):**
-  * Flat physical linear address space ($0 \to \text{MaxSize} - 1$).
-  * Dual-mode address router: safely routes bus offsets to either a 1 MB test memory bank (standalone mode) or the OS kernel's real physical RAM array `krnl->mram->storage` (live OS mode).
-  * Boundary protection preventing out-of-bounds reads/writes.
-* **Verilator RTL Integration via DPI-C (`src/dpi_rtl.cpp`, `src/dma_c_testbench.cpp`):**
-  * Cycle-accurate 32-bit word transfers (`dpi_bank_read32_legacy`, `dpi_bank_write32_legacy`).
-  * Completion signaling via hardware interrupts (`dma_done_callback`).
-* **Virtual-to-Physical Address Translation (`src/libmem.c`):**
-  * Translates logical region IDs and byte offsets into physical bus offsets before passing transfer descriptors to hardware.
-  * Walks the 5-level page table for user pages (`FPN * 4096 + offset`).
-  * Direct arithmetic subtraction for kernel direct-mapped addresses (`VA - 0xff00000000000000ULL`).
-* **Non-Blocking Asynchronous Queue:**
-  * Background worker thread with thread-safe FIFO request queue (`dma_async_submit`).
-  * Non-blocking execution so the CPU continues running processes while the DMA hardware transfers data in parallel.
-
-### 2. 64-bit Memory Management (`MM64` & VMAs)
-* **5-Level Paging Hierarchy (`src/mm64.c`):** PGD $\to$ P4D $\to$ PUD $\to$ PMD $\to$ PT directory structures with recursive cleanup (`free_level`).
-* **VMA Allocation (`src/libmem.c`, `src/mm-vm.c`):** First-fit search (`alloc_large_vma_macos`, `alloc_chunk_vma`), sorted VMA linked list insertion, and frame reclamation.
-* **Kernel Heap Allocator:** Kernel memory allocation (`kmalloc`) and user-to-kernel memory transfer routines.
-
-### 3. Multi-Level Queue Scheduler & Concurrency
-* **MLQ Scheduler (`src/sched.c`, `src/queue.c`):** Priority-based scheduling (priorities 0–139) with preemption and CPU time slicing.
-* **Thread-Safe Synchronization:** Concurrency locks on physical RAM storage (`lock_ram_storage`), virtual memory operations (`mmvm_lock`), and DMA completion barriers (`dma_async_wait_all`).
-
----
-
 ## 🛠️ Prerequisites
 
 * **Operating System:** Linux (Ubuntu 20.04/22.04 or WSL2 on Windows)
