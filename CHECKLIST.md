@@ -65,12 +65,12 @@
 - [ ] **[CRITICAL]** Unify `caller->mm` vs `caller->krnl->mm` usage across `os.c`, `mm64.c`, `mm-vm.c`, and `libmem.c`.
 
 ### Physical Memory Management (`src/mm-memphy.c`)
-- [ ] **[CRITICAL]** Fix free frame list tracking in `MEMPHY_get_freefp()`:
+- [X] **[CRITICAL]** Fix free frame list tracking in `MEMPHY_get_freefp()`:
   - Retrieve head frame number `*retfpn = fp->fpn`.
   - Advance `mp->free_fp_list = fp->fp_next` before calling `free(fp)`.
 - [x] Implement frame recycling in `MEMPHY_put_freefp()`.
 - [x] Implement physical read and write in `MEMPHY_read()` and `MEMPHY_write()`.
-- [ ] Implement memory dump in `MEMPHY_dump()`.
+- [X] Implement memory dump in `MEMPHY_dump()`.
 
 ### Virtual Memory Areas & Swapping (`src/mm-vm.c`, `src/libmem.c`)
 - [x] Implement `get_vma_by_num()` in `src/mm-vm.c` with iterative VMA traversal.
@@ -142,7 +142,7 @@
 - [ ] Audit `queue_lock` in `sched.c` to prevent deadlock and race conditions during multi-CPU dispatch.
 - [x] Protect DMA hardware and request queue via `g_dma_hw_lock` and `g_dma_q_lock`.
 - [x] Audit `mmvm_lock` and `kmm_lock` in `libmem.c`.
-- [ ] Protect physical memory allocator (`free_fp_list` in `mm-memphy.c`) against concurrent allocations from multiple CPUs.
+- [X] Protect physical memory allocator (`free_fp_list` in `mm-memphy.c`) against concurrent allocations from multiple CPUs.
 
 ---
 

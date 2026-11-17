@@ -235,11 +235,19 @@ int vmap_pgd_memset(struct pcb_t *caller,           // process call
                     addr_t addr,                       // start address which is aligned to pagesz
                     int pgnum)                      // num of mapping page
 {
-  //int pgit = 0;
-  //uint64_t pattern = 0xdeadbeef;
+  int pgit = 0;
+  uint64_t pattern = 0xdeadbeef;
 
   /* TODO memset the page table with given pattern
    */
+  if (caller == NULL)
+    return -1;
+
+  pattern = pattern & ~(PAGING_PTE_PRESENT_MASK | PAGING_PTE_SWAPPED_MASK);
+
+  for (pgit = 0; pgit < pgnum; pgit++) {
+    pte_set_entry(caller->mm, (addr >> 12) + pgit, pattern, caller);
+  }
 
   return 0;
 }

@@ -675,7 +675,28 @@ int __write_user_mem(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, B
   return 0;
 }
 
+#ifdef MM64
+static void free_level(addr_t *table, int level, struct krnl_t *krnl)
+{
+  for (int i = 0; i < PAGING64_PTRS_PER_TABLE; i++) {
+    addr_t e = table[i];
+    if (e == 0)
+      continue;
 
+    if (level < 4) {
+      addr_t *child = (addr_t *)(uintptr_t)e;
+      free_level(child, level + 1, krnl);
+      free(child);
+    } else {
+      if (PAGING_PAGE_PRESENT(e)) {
+        MEMPHY_put_freefp(krnl->mram, PAGING_FPN(e));
+      } else if (e & PAGING_PTE_SWAPPED_MASK) {
+        MEMPHY_put_freefp(krnl->mswp[PAGING_PTE_SWPTYP(e)], PAGING_SWP(e));
+      }
+    }
+  }
+}
+#endif
 /*free_pcb_memphy - collect all memphy of pcb
  *@caller: caller
  *@vmaid: ID vm area to alloc memory region
@@ -683,6 +704,17 @@ int __write_user_mem(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, B
  */
 int free_pcb_memph(struct pcb_t *caller)
 {
+#ifdef MM64
+  if (caller == NULL || caller->mm == NULL || caller->mm->pgd == NULL)
+    return -1;
+
+  pthread_mutex_lock(&mmvm_lock);
+  free_level(caller->mm->pgd, 0, caller->krnl);
+  free(caller->mm->pgd);
+  caller->mm->pgd = NULL;
+  pthread_mutex_unlock(&mmvm_lock);
+  return 0;
+#else
   pthread_mutex_lock(&mmvm_lock);
   int pagenum, fpn;
   uint32_t pte;
@@ -705,6 +737,7 @@ int free_pcb_memph(struct pcb_t *caller)
 
   pthread_mutex_unlock(&mmvm_lock);
   return 0;
+#endif
 }
 
 
