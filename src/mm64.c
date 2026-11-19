@@ -440,35 +440,18 @@ int init_mm(struct mm_struct *mm, struct pcb_t *caller)
   }
   else {
   /* By default the owner comes with at least one vma */
-  struct vm_area_struct *vma_malloc_used = malloc(sizeof(struct vm_area_struct));
-  struct vm_area_struct *vma_valloc_used = malloc(sizeof(struct vm_area_struct));
-  struct vm_area_struct *vma_stack0 = malloc(sizeof(struct vm_area_struct));
+  struct vm_area_struct *vma0 = malloc(sizeof(struct vm_area_struct));
 
-  vma_malloc_used->vm_id = 0;
-  vma_malloc_used->vm_start = 0x5d000;
-  vma_malloc_used->vm_end = vma_malloc_used->vm_start;
-  vma_malloc_used->sbrk = vma_malloc_used->vm_start;
-  vma_malloc_used->vm_next = vma_valloc_used;
-  vma_malloc_used->vm_mm = mm;
-  vma_malloc_used->vm_freerg_list = NULL;
+  vma0->vm_id = 0;
+  vma0->vm_start = 0x0000000000000000;
+  vma0->vm_end = vma0->vm_start;
+  vma0->sbrk = vma0->vm_start;
+  vma0->vm_next = NULL;
+  vma0->vm_mm = mm;
+  vma0->vm_freerg_list = NULL;
 
-  vma_valloc_used->vm_id = 1;
-  vma_valloc_used->vm_start = 0xff000;
-  vma_valloc_used->vm_end = vma_valloc_used->vm_start;
-  vma_valloc_used->sbrk = vma_valloc_used->vm_start;
-  vma_valloc_used->vm_next = vma_stack0;
-  vma_valloc_used->vm_mm = mm;
-  vma_valloc_used->vm_freerg_list = NULL;
-
-  vma_stack0->vm_id = 2;
-  vma_stack0->vm_start = 0xbfffe000;
-  vma_stack0->vm_end = vma_stack0->vm_start;
-  vma_stack0->sbrk = vma_stack0->vm_start;
-  vma_stack0->vm_next = NULL;
-  vma_stack0->vm_mm = mm;
-  vma_stack0->vm_freerg_list = NULL;
   /* TODO: update mmap */
-  mm->mmap = vma_malloc_used;
+  mm->mmap = vma0;
   }
   mm->fifo_pgn = NULL;
   mm->kcpooltbl = calloc(PAGING_MAX_SYMTBL_SZ, sizeof(struct kcache_pool_struct));

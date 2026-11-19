@@ -25,19 +25,14 @@
 
 static pthread_mutex_t mmvm_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t kmm_lock = PTHREAD_MUTEX_INITIALIZER;
-static int cur_heap_vmaid[32] = {0};
 
 void dma_async_wait_caller(struct pcb_t *caller);
 void dma_async_wait_all(void);
 
-static int is_canonical_address(addr_t addr)
+static inline int is_canonical_address(addr_t addr)
 {
-    uint64_t msb7 = (addr >> 57) & 0x7FULL;
-    uint64_t bit56 = (addr >> 56) & 1ULL;
-
-    if ((bit56 == 0 && msb7 == 0) || (bit56 == 1 && msb7 == 0x7FULL))
-        return 1;
-    return 0;
+    uint64_t top = (addr >> 56) & 0xffULL;
+    return (top == 0x00ULL || top == 0xffULL);
 }
 
 /*enlist_vm_freerg_list - add new rg to freerg_list
@@ -191,236 +186,6 @@ int __free(struct pcb_t *caller, int vmaid, int rgid)
   return 0;
 }
 
-/*
- * alloc_large_vma_macos - allocate a new vma for rg >= 4096 bytes
- */
-int alloc_large_vma_macos(struct pcb_t *caller, addr_t size, int rgid, addr_t *alloc_addr)
-{
-  pthread_mutex_lock(&mmvm_lock);
-  dma_async_wait_all();
-  addr_t pagesz = PAGING64_PAGESZ;
-  addr_t aligned_size = ((size + pagesz - 1) / pagesz) * pagesz;
-  int incpgnum = (int)(aligned_size / pagesz);
-
-  int next_id = 3;
-  struct vm_area_struct *p = caller->mm->mmap;
-  while (p != NULL) {
-    if ((int)p->vm_id >= next_id) {
-      next_id = p->vm_id + 1;
-    }
-    p = p->vm_next;
-  }
-
-  addr_t hole_start = 0;
-  addr_t cur_candidate = 0xff000;
-  struct vm_area_struct *cur = caller->mm->mmap;
-  while (cur != NULL) {
-    if (cur->vm_end <= cur_candidate) {
-      cur = cur->vm_next;
-      continue;
-    }
-    if (cur->vm_start > cur_candidate) {
-      if (cur->vm_start - cur_candidate >= aligned_size) {
-        hole_start = cur_candidate;
-        break;
-      }
-    }
-    if (cur->vm_end > cur_candidate) {
-      cur_candidate = ((cur->vm_end + pagesz - 1) / pagesz) * pagesz;
-    }
-    cur = cur->vm_next;
-  }
-
-  if (hole_start == 0 && (0xbfffe000 > cur_candidate) && (0xbfffe000 - cur_candidate >= aligned_size)) {
-    hole_start = cur_candidate;
-  }
-  if (hole_start == 0) {
-    pthread_mutex_unlock(&mmvm_lock);
-    return -1;
-  }
-  struct vm_area_struct *large_vma = malloc(sizeof(struct vm_area_struct));
-  if (large_vma == NULL) {
-    pthread_mutex_unlock(&mmvm_lock);
-    return -1;
-  }
-  large_vma->vm_id = next_id;
-  large_vma->vm_start = hole_start;
-  large_vma->vm_end = hole_start + aligned_size;
-  large_vma->sbrk = large_vma->vm_end;
-  large_vma->vm_mm = caller->mm;
-  large_vma->vm_freerg_list = NULL;
-  large_vma->vm_next = NULL;
-
-  insert_vma_sorted(caller->mm, large_vma);
-
-  struct vm_rg_struct mapped_rg;
-  if (vm_map_ram(caller, large_vma->vm_start, large_vma->vm_end, large_vma->vm_start, incpgnum, &mapped_rg) < 0) {
-    struct vm_area_struct *prev = NULL, *scan = caller->mm->mmap;
-    while (scan != NULL && scan != large_vma) {
-      prev = scan;
-      scan = scan->vm_next;
-    }
-    if (scan == large_vma) {
-      if (prev == NULL) caller->mm->mmap = scan->vm_next;
-      else prev->vm_next = scan->vm_next;
-    }
-    free(large_vma);
-    pthread_mutex_unlock(&mmvm_lock);
-    return -1;
-  }
-  caller->mm->symrgtbl[rgid].rg_start = large_vma->vm_start;
-  caller->mm->symrgtbl[rgid].rg_end   = large_vma->vm_start + size;
-  caller->mm->symrgtbl[rgid].vmaid    = large_vma->vm_id;
-  *alloc_addr = large_vma->vm_start;
-  pthread_mutex_unlock(&mmvm_lock);
-  return 0;
-}
-
-/*
- * free_large_vma_macos - free a vma and return frame
- */
-int free_large_vma_macos(struct pcb_t *caller, int rgid)
-{
-  if (caller == NULL || caller->mm == NULL || rgid < 0 || rgid >= PAGING_MAX_SYMTBL_SZ)
-    return -1;
-  pthread_mutex_lock(&mmvm_lock);
-  dma_async_wait_all();
-  struct vm_rg_struct *rgnode = get_symrg_byid(caller->mm, rgid);
-  if (rgnode == NULL || (rgnode->rg_start == 0 && rgnode->rg_end == 0)) {
-    pthread_mutex_unlock(&mmvm_lock);
-    return -1;
-  }
-  int target_vmaid = rgnode->vmaid;
-
-  struct vm_area_struct *prev = NULL;
-  struct vm_area_struct *cur = caller->mm->mmap;
-  while (cur != NULL && (int)cur->vm_id != target_vmaid) {
-    prev = cur;
-    cur = cur->vm_next;
-  }
-  if (cur == NULL) {
-    pthread_mutex_unlock(&mmvm_lock);
-    return -1;
-  }
-  if (prev == NULL) {
-    caller->mm->mmap = cur->vm_next;
-  } else {
-    prev->vm_next = cur->vm_next;
-  }
-
-  addr_t pagesz = PAGING64_PAGESZ;
-  int pgnum = (int)((cur->vm_end - cur->vm_start) / pagesz);
-  for (int pgit = 0; pgit < pgnum; pgit++) {
-    addr_t pgn = (cur->vm_start + (addr_t)pgit * pagesz) >> PAGING64_ADDR_PT_SHIFT;
-    uint64_t pte = pte_get_entry(caller->mm, pgn, caller);
-    if (PAGING_PAGE_PRESENT(pte)) {
-      addr_t fpn = PAGING_PTE_FPN(pte);
-      MEMPHY_put_freefp(caller->krnl->mram, fpn);
-    }
-  }
-
-  rgnode->rg_start = 0;
-  rgnode->rg_end   = 0;
-  rgnode->vmaid    = -1;
-
-  free(cur);
-  pthread_mutex_unlock(&mmvm_lock);
-  return 0;
-}
-
-int alloc_chunk_vma(struct pcb_t *caller, addr_t size, int rgid, addr_t *alloc_addr)
-{
-  pthread_mutex_lock(&mmvm_lock);
-  dma_async_wait_all();
-  addr_t pagesz = PAGING64_PAGESZ;
-  addr_t aligned_size = pagesz;
-  int incpgnum = 1;
-
-  int next_id = 3;
-  struct vm_area_struct *p = caller->mm->mmap;
-  while (p != NULL) {
-    if ((int)p->vm_id >= next_id) next_id = p->vm_id + 1;
-    p = p->vm_next;
-  }
-
-  addr_t hole_start = 0;
-  addr_t cur_candidate = 0xff000;
-  struct vm_area_struct *cur = caller->mm->mmap;
-  while (cur != NULL) {
-    if (cur->vm_end <= cur_candidate) {
-      cur = cur->vm_next;
-      continue;
-    }
-    if (cur->vm_start > cur_candidate) {
-      if (cur->vm_start - cur_candidate >= aligned_size) {
-        hole_start = cur_candidate;
-        break;
-      }
-    }
-    if (cur->vm_end > cur_candidate) {
-      cur_candidate = ((cur->vm_end + pagesz - 1) / pagesz) * pagesz;
-    }
-    cur = cur->vm_next;
-  }
-  if (hole_start == 0 && (0xbfffe000 > cur_candidate) && (0xbfffe000 - cur_candidate >= aligned_size)) {
-    hole_start = cur_candidate;
-  }
-  if (hole_start == 0) {
-    pthread_mutex_unlock(&mmvm_lock);
-    return -1;
-  }
-
-  struct vm_area_struct *chunk_vma = malloc(sizeof(struct vm_area_struct));
-  if (chunk_vma == NULL) {
-    pthread_mutex_unlock(&mmvm_lock);
-    return -1;
-  }
-  chunk_vma->vm_id = next_id;
-  chunk_vma->vm_start = hole_start;
-  chunk_vma->vm_end = hole_start + aligned_size;
-  chunk_vma->sbrk = chunk_vma->vm_end;
-  chunk_vma->vm_mm = caller->mm;
-  chunk_vma->vm_freerg_list = NULL;
-  chunk_vma->vm_next = NULL;
-
-  insert_vma_sorted(caller->mm, chunk_vma);
-
-  struct vm_rg_struct mapped_rg;
-  if (vm_map_ram(caller, chunk_vma->vm_start, chunk_vma->vm_end, chunk_vma->vm_start, incpgnum, &mapped_rg) < 0) {
-    struct vm_area_struct *prev = NULL, *scan = caller->mm->mmap;
-    while (scan != NULL && scan != chunk_vma) {
-      prev = scan;
-      scan = scan->vm_next;
-    }
-    if (scan == chunk_vma) {
-      if (prev == NULL) caller->mm->mmap = scan->vm_next;
-      else prev->vm_next = scan->vm_next;
-    }
-    free(chunk_vma);
-    pthread_mutex_unlock(&mmvm_lock);
-    return -1;
-  }
-
-  caller->mm->symrgtbl[rgid].rg_start = chunk_vma->vm_start;
-  caller->mm->symrgtbl[rgid].rg_end   = chunk_vma->vm_start + size;
-  caller->mm->symrgtbl[rgid].vmaid    = chunk_vma->vm_id;
-  *alloc_addr = chunk_vma->vm_start;
-
-  if (size < aligned_size) {
-    struct vm_rg_struct *free_rg = malloc(sizeof(struct vm_rg_struct));
-    if (free_rg != NULL) {
-      free_rg->rg_start = chunk_vma->vm_start + size;
-      free_rg->rg_end   = chunk_vma->vm_end;
-      free_rg->vmaid    = chunk_vma->vm_id;
-      free_rg->rg_next  = NULL;
-      enlist_vm_freerg_list(caller->mm, free_rg);
-    }
-  }
-
-  pthread_mutex_unlock(&mmvm_lock);
-  return 0;
-}
-
 /*liballoc - PAGING-based allocate a region memory
  *@proc:  Process executing the instruction
  *@size: allocated size
@@ -431,20 +196,7 @@ int liballoc(struct pcb_t *proc, addr_t size, uint32_t reg_index)
   addr_t  addr;
   int val;
 
-  if (size >= PAGING64_PAGESZ) {
-    val = alloc_large_vma_macos(proc, size, reg_index, &addr);
-  }
-  else {
-    int active_vmaid = (proc->pid < 32) ? cur_heap_vmaid[proc->pid] : 0;
-    val = __alloc(proc, active_vmaid, reg_index, size, &addr);
-
-    if (val < 0) {
-      val = alloc_chunk_vma(proc, size, reg_index, &addr);
-      if (val == 0 && proc->pid < 32) {
-        cur_heap_vmaid[proc->pid] = proc->mm->symrgtbl[reg_index].vmaid;
-      }
-    }
-  }
+  val = __alloc(proc, 0, reg_index, size, &addr);
   if (val == -1)
   {
     return -1;
@@ -479,28 +231,9 @@ int libfree(struct pcb_t *proc, uint32_t reg_index)
     return -1;
   }
 
-  if (rgnode->rg_start >= 0xbfffe000) {
-    pthread_mutex_lock(&kmm_lock);
-    if (proc->krnl != NULL && proc->krnl->mm != NULL) {
-      proc->krnl->mm->symrgtbl[reg_index].rg_start = 0;
-      proc->krnl->mm->symrgtbl[reg_index].rg_end = 0;
-      proc->krnl->mm->symrgtbl[reg_index].vmaid = -1;
-    }
-    rgnode->rg_start = 0;
-    rgnode->rg_end = 0;
-    rgnode->vmaid = -1;
-    pthread_mutex_unlock(&kmm_lock);
-    return 0; 
-  }
-
   int val;
   addr_t size = rgnode->rg_end - rgnode->rg_start;
-  if (size >= PAGING64_PAGESZ) {
-    val = free_large_vma_macos(proc, reg_index);
-  }
-  else {
-    val = __free(proc, rgnode->vmaid, reg_index);
-  }
+  val = __free(proc, rgnode->vmaid, reg_index);
   if (val == -1)
   {
     return -1;
@@ -695,15 +428,11 @@ int __read(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE *data)
   addr_t access_addr = currg->rg_start + offset;
 
   if (!is_canonical_address(access_addr)) {
-    printf("[INVALID ADDR] Process %d tried to access non-canonical address at %llx!\n", 
-           caller->pid, (unsigned long long)access_addr);
     pthread_mutex_unlock(&mmvm_lock);
     return -1;
   }
 
-  if (((access_addr >> 56) & 1ULL) == 1 || access_addr >= 0xbfffe000ULL) {
-      printf("[SECURITY FAULT] Process %d denied accessing kernel space at %llx!\n", 
-            caller->pid, (unsigned long long)access_addr);
+  if (((access_addr >> 56) & 0xffULL) == 0xffULL) {
       pthread_mutex_unlock(&mmvm_lock);
       return -1;
   }
@@ -768,15 +497,11 @@ int __write(struct pcb_t *caller, int vmaid, int rgid, addr_t offset, BYTE value
   addr_t access_addr = currg->rg_start + offset;
 
   if (!is_canonical_address(access_addr)) {
-    printf("[INVALID ADDR] Process %d tried to access non-canonical address at %llx!\n", 
-           caller->pid, (unsigned long long)access_addr);
     pthread_mutex_unlock(&mmvm_lock);
     return -1;
   }
 
-  if (((access_addr >> 56) & 1ULL) == 1 || access_addr >= 0xbfffe000ULL) {
-      printf("[SECURITY FAULT] Process %d denied accessing kernel space at %llx!\n", 
-            caller->pid, (unsigned long long)access_addr);
+  if (((access_addr >> 56) & 0xffULL) == 0xffULL) {
       pthread_mutex_unlock(&mmvm_lock);
       return -1;
   }
